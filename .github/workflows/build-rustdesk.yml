@@ -139,32 +139,33 @@ jobs:
         echo "Creating release package..."
         
         if [ -f "target/release/rustdesk" ]; then
-          # Create release directory
           mkdir -p rustdesk-linux-release
-          
-          # Copy binary
           cp target/release/rustdesk rustdesk-linux-release/
-          
-          # Create info file
-          cat > rustdesk-linux-release/BUILD_INFO.txt << EOF
-RustDesk Custom Build
-====================
-Built on: $(date)
-Git commit: ${GITHUB_SHA:0:8}
-Build environment: Ubuntu 22.04
-Rust version: $(rustc --version)
-
-Custom Configuration:
-- RENDEZVOUS_SERVER: ${RENDEZVOUS_SERVER:-default}
-- RS_PUB_KEY: $([ -n "$RS_PUB_KEY" ] && echo "configured" || echo "default")
-
-Usage:
-  chmod +x rustdesk
-  ./rustdesk
-EOF
-          
-          # Make binary executable
           chmod +x rustdesk-linux-release/rustdesk
+          
+          # Create simple info file
+          echo "RustDesk Custom Build" > rustdesk-linux-release/BUILD_INFO.txt
+          echo "=====================" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Built on: $(date)" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Git commit: ${GITHUB_SHA:0:8}" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Build environment: Ubuntu 22.04" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Rust version: $(rustc --version)" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Custom Configuration:" >> rustdesk-linux-release/BUILD_INFO.txt
+          if [ -n "$RENDEZVOUS_SERVER" ]; then
+            echo "- RENDEZVOUS_SERVER: $RENDEZVOUS_SERVER" >> rustdesk-linux-release/BUILD_INFO.txt
+          else
+            echo "- RENDEZVOUS_SERVER: default" >> rustdesk-linux-release/BUILD_INFO.txt
+          fi
+          if [ -n "$RS_PUB_KEY" ]; then
+            echo "- RS_PUB_KEY: configured" >> rustdesk-linux-release/BUILD_INFO.txt
+          else
+            echo "- RS_PUB_KEY: default" >> rustdesk-linux-release/BUILD_INFO.txt
+          fi
+          echo "" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Usage:" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "  chmod +x rustdesk" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "  ./rustdesk" >> rustdesk-linux-release/BUILD_INFO.txt
           
           echo "Release package created:"
           ls -la rustdesk-linux-release/
@@ -307,40 +308,42 @@ EOF
       run: |
         Write-Host "Creating release package..."
         
-        # Search for rustdesk executables
         $rustdeskExecutables = Get-ChildItem "target\release" -Include "rustdesk*" -File
         
         if ($rustdeskExecutables.Count -gt 0) {
-          # Create release directory
           New-Item -ItemType Directory -Path "rustdesk-windows-release" -Force
           
-          # Copy all rustdesk executables
           $rustdeskExecutables | ForEach-Object {
             Copy-Item $_.FullName "rustdesk-windows-release\"
             Write-Host "Copied: $($_.Name)"
           }
           
-          # Create info file
-          $serverValue = if ($env:RENDEZVOUS_SERVER) { $env:RENDEZVOUS_SERVER } else { "default" }
-          $keyValue = if ($env:RS_PUB_KEY) { "configured" } else { "default" }
+          # Create info file line by line
+          $infoFile = "rustdesk-windows-release\BUILD_INFO.txt"
+          "RustDesk Custom Build" | Out-File -FilePath $infoFile -Encoding UTF8
+          "=====================" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Built on: $(Get-Date)" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Git commit: $($env:GITHUB_SHA.Substring(0,8))" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Build environment: Windows Latest" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Rust version: $(rustc --version)" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Custom Configuration:" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           
-          $buildInfo = @"
-RustDesk Custom Build
-====================
-Built on: $(Get-Date)
-Git commit: $($env:GITHUB_SHA.Substring(0,8))
-Build environment: Windows Latest
-Rust version: $(rustc --version)
-
-Custom Configuration:
-- RENDEZVOUS_SERVER: $serverValue
-- RS_PUB_KEY: $keyValue
-
-Usage:
-  Double-click rustdesk.exe to run
-"@
+          if ($env:RENDEZVOUS_SERVER) {
+            "- RENDEZVOUS_SERVER: $env:RENDEZVOUS_SERVER" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          } else {
+            "- RENDEZVOUS_SERVER: default" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          }
           
-          Set-Content "rustdesk-windows-release\BUILD_INFO.txt" $buildInfo
+          if ($env:RS_PUB_KEY) {
+            "- RS_PUB_KEY: configured" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          } else {
+            "- RS_PUB_KEY: default" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          }
+          
+          "" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Usage:" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "  Double-click rustdesk.exe to run" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           
           Write-Host "Release package created:"
           Get-ChildItem "rustdesk-windows-release"
