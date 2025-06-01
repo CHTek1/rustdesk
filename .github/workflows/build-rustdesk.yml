@@ -222,20 +222,22 @@ EOF
         RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
         RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
       run: |
-        Write-Host "🔧 Konfiguriere Custom RustDesk Settings..."
+        Write-Host "Konfiguriere Custom RustDesk Settings..."
         
-        # Prüfe Secrets
-        if ("${{ secrets.RENDEZVOUS_SERVER }}" -eq "") {
-          Write-Host "⚠️ RENDEZVOUS_SERVER Secret nicht gesetzt - verwende Standard"
+        # Pruefe Secrets
+        if ([string]::IsNullOrEmpty("${{ secrets.RENDEZVOUS_SERVER }}")) {
+          Write-Host "RENDEZVOUS_SERVER Secret nicht gesetzt - verwende Standard"
         } else {
-          Write-Host "✅ RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}"
+          Write-Host "RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}"
         }
         
-        if ("${{ secrets.RS_PUB_KEY }}" -eq "") {
-          Write-Host "⚠️ RS_PUB_KEY Secret nicht gesetzt - verwende Standard"  
+        if ([string]::IsNullOrEmpty("${{ secrets.RS_PUB_KEY }}")) {
+          Write-Host "RS_PUB_KEY Secret nicht gesetzt - verwende Standard"  
         } else {
-          $keyPreview = "${{ secrets.RS_PUB_KEY }}".Substring(0, [Math]::Min(20, "${{ secrets.RS_PUB_KEY }}".Length))
-          Write-Host "✅ RS_PUB_KEY: $keyPreview..."
+          $keyLength = "${{ secrets.RS_PUB_KEY }}".Length
+          $previewLength = [Math]::Min(20, $keyLength)
+          $keyPreview = "${{ secrets.RS_PUB_KEY }}".Substring(0, $previewLength)
+          Write-Host "RS_PUB_KEY: $keyPreview..."
         }
         
         # Setze Build-Umgebungsvariablen
@@ -244,75 +246,75 @@ EOF
         
         # Finde und modifiziere Config-Dateien
         Write-Host ""
-        Write-Host "🔍 Suche Config-Dateien..."
+        Write-Host "Suche Config-Dateien..."
         Get-ChildItem -Recurse -Include "config.rs" | ForEach-Object {
           $file = $_.FullName
-          Write-Host "📄 Gefunden: $file"
+          Write-Host "Gefunden: $file"
           
           $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
           if ($content -and ($content -match 'RENDEZVOUS_SERVERS|RS_PUB_KEY|PUBLIC_RS_PUB_KEY')) {
-            Write-Host "  🔧 Bearbeite $file..."
+            Write-Host "  Bearbeite $file..."
             
             # Backup erstellen
             Copy-Item $file "$file.backup" -ErrorAction SilentlyContinue
             
             # Server konfigurieren
-            if ("${{ secrets.RENDEZVOUS_SERVER }}" -ne "" -and $content -match 'RENDEZVOUS_SERVERS') {
+            if (![string]::IsNullOrEmpty("${{ secrets.RENDEZVOUS_SERVER }}") -and $content -match 'RENDEZVOUS_SERVERS') {
               $content = $content -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];', "pub const RENDEZVOUS_SERVERS: &[&str] = &[`"${{ secrets.RENDEZVOUS_SERVER }}`"];"
-              Write-Host "    ✅ RENDEZVOUS_SERVER konfiguriert"
+              Write-Host "    RENDEZVOUS_SERVER konfiguriert"
             }
             
             # Public Key konfigurieren
-            if ("${{ secrets.RS_PUB_KEY }}" -ne "" -and $content -match 'RS_PUB_KEY|PUBLIC_RS_PUB_KEY') {
+            if (![string]::IsNullOrEmpty("${{ secrets.RS_PUB_KEY }}") -and $content -match 'RS_PUB_KEY|PUBLIC_RS_PUB_KEY') {
               $content = $content -replace 'pub const (RS_PUB_KEY|PUBLIC_RS_PUB_KEY): &str = ".*?";', "pub const `$1: &str = `"${{ secrets.RS_PUB_KEY }}`";"
-              Write-Host "    ✅ RS_PUB_KEY konfiguriert"
+              Write-Host "    RS_PUB_KEY konfiguriert"
             }
             
-            # Schreibe zurück
+            # Schreibe zurueck
             Set-Content $file $content -NoNewline -ErrorAction SilentlyContinue
           } else {
-            Write-Host "  ℹ️ Keine relevanten Konstanten gefunden"
+            Write-Host "  Keine relevanten Konstanten gefunden"
           }
         }
       shell: powershell
 
     - name: Build RustDesk
       run: |
-        Write-Host "🚀 Starte RustDesk Build..."
+        Write-Host "Starte RustDesk Build..."
         Write-Host "Build-Umgebung:"
         Write-Host "  Rust: $(rustc --version)"
         Write-Host "  Cargo: $(cargo --version)"
         
         Write-Host ""
-        Write-Host "🔨 Führe cargo build --release aus..."
+        Write-Host "Fuehre cargo build --release aus..."
         
         try {
           cargo build --release --verbose 2>&1 | Tee-Object -FilePath "build.log"
           
           Write-Host ""
-          Write-Host "🎉 BUILD ERFOLGREICH!"
+          Write-Host "BUILD ERFOLGREICH!"
           
           Write-Host ""
-          Write-Host "📦 Gebaute Binaries:"
+          Write-Host "Gebaute Binaries:"
           if (Test-Path "target\release") {
             Get-ChildItem "target\release" -Include "*.exe" | ForEach-Object {
               $size = [math]::Round($_.Length / 1MB, 1)
-              Write-Host "  ✅ $($_.FullName) ($size MB)"
+              Write-Host "  $($_.FullName) ($size MB)"
             }
           }
           
-          # Prüfe spezifisch auf rustdesk.exe
+          # Pruefe spezifisch auf rustdesk.exe
           if (Test-Path "target\release\rustdesk.exe") {
             Write-Host ""
-            Write-Host "✅ RustDesk.exe erfolgreich erstellt!"
+            Write-Host "RustDesk.exe erfolgreich erstellt!"
             Get-Item "target\release\rustdesk.exe" | Format-List Name, Length, LastWriteTime
           } else {
-            Write-Host "⚠️ rustdesk.exe nicht gefunden, aber andere Binaries vorhanden"
+            Write-Host "rustdesk.exe nicht gefunden, aber andere Binaries vorhanden"
           }
           
         } catch {
           Write-Host ""
-          Write-Host "❌ BUILD FEHLGESCHLAGEN: $($_.Exception.Message)"
+          Write-Host "BUILD FEHLGESCHLAGEN: $($_.Exception.Message)"
           if (Test-Path "build.log") {
             Write-Host "Letzte Fehlermeldungen:"
             Get-Content "build.log" | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" }
@@ -323,9 +325,9 @@ EOF
 
     - name: Create release package
       run: |
-        Write-Host "📦 Erstelle Release-Paket..."
+        Write-Host "Erstelle Release-Paket..."
         
-        # Suche nach rustdesk executable (könnte .exe oder anderer Name sein)
+        # Suche nach rustdesk executable (koennte .exe oder anderer Name sein)
         $rustdeskExecutables = Get-ChildItem "target\release" -Include "rustdesk*" -File
         
         if ($rustdeskExecutables.Count -gt 0) {
@@ -335,12 +337,12 @@ EOF
           # Kopiere alle rustdesk executables
           $rustdeskExecutables | ForEach-Object {
             Copy-Item $_.FullName "rustdesk-windows-release\"
-            Write-Host "✅ Kopiert: $($_.Name)"
+            Write-Host "Kopiert: $($_.Name)"
           }
           
           # Erstelle Info-Datei
-          $serverValue = if ("${{ secrets.RENDEZVOUS_SERVER }}" -ne "") { "${{ secrets.RENDEZVOUS_SERVER }}" } else { "default" }
-          $keyValue = if ("${{ secrets.RS_PUB_KEY }}" -ne "") { "configured" } else { "default" }
+          $serverValue = if (![string]::IsNullOrEmpty("${{ secrets.RENDEZVOUS_SERVER }}")) { "${{ secrets.RENDEZVOUS_SERVER }}" } else { "default" }
+          $keyValue = if (![string]::IsNullOrEmpty("${{ secrets.RS_PUB_KEY }}")) { "configured" } else { "default" }
           
           $buildInfo = @"
 RustDesk Custom Build
@@ -360,10 +362,10 @@ Usage:
           
           Set-Content "rustdesk-windows-release\BUILD_INFO.txt" $buildInfo
           
-          Write-Host "✅ Release-Paket erstellt:"
+          Write-Host "Release-Paket erstellt:"
           Get-ChildItem "rustdesk-windows-release" | Format-Table Name, Length
         } else {
-          Write-Host "❌ Keine rustdesk executables gefunden"
+          Write-Host "Keine rustdesk executables gefunden"
           exit 1
         }
       shell: powershell
