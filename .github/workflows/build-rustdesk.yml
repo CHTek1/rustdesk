@@ -17,144 +17,112 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+      with:
+        submodules: recursive
+        
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: stable
-        override: true
         components: rustfmt, clippy
+        
+    - name: Install Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
         
     - name: Install dependencies
       run: |
-        # Windows-spezifische Dependencies
-        choco install llvm
-        # vcpkg für zusätzliche Libraries
-        git clone https://github.com/Microsoft/vcpkg.git
-        cd vcpkg
-        .\bootstrap-vcpkg.bat
-        .\vcpkg install libvpx:x64-windows libyuv:x64-windows opus:x64-windows
-        echo "VCPKG_ROOT=$PWD" >> $GITHUB_ENV
-        cd ..
+        # LLVM für Windows
+        choco install llvm -y
         
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+        # vcpkg für Libraries
+        git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
+        C:\vcpkg\bootstrap-vcpkg.bat
+        C:\vcpkg\vcpkg.exe install libvpx:x64-windows libyuv:x64-windows opus:x64-windows
+        echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         
-    - name: Cache cargo index
-      uses: actions/cache@v4
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-        
-    - name: Cache cargo build
-      uses: actions/cache@v4
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
-
     - name: Configure custom settings
+      env:
+        RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+        RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
       run: |
-        # Setze die korrekten Umgebungsvariablen für RustDesk
-        echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" >> $GITHUB_ENV
-        echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" >> $GITHUB_ENV
+        # Setze Build-Umgebungsvariablen
+        echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         
-        # Debug: Zeige verfügbare Dateien
-        echo "📁 Verfügbare Rust-Dateien:"
-        find . -name "*.rs" -path "*/config*" -o -name "config.rs" | head -10
+        # Suche nach Konfigurationsdateien
+        Write-Host "🔍 Suche nach Konfigurationsdateien..."
+        Get-ChildItem -Recurse -Name "config.rs" | ForEach-Object { Write-Host "Gefunden: $_" }
         
-        # Zusätzlich: Modifiziere Konfigurationsdateien direkt
-        # RustDesk sucht nach diesen Dateien für hardcoded Werte
-        $configFiles = @("libs/hbb_common/src/config.rs", "src/config.rs", "src/common.rs")
+        # Bearbeite Konfigurationsdateien falls gefunden
+        $configFiles = @(
+          "libs\hbb_common\src\config.rs",
+          "src\config.rs",
+          "flutter\lib\common.dart"
+        )
         
-        foreach ($configFile in $configFiles) {
-          if (Test-Path $configFile) {
-            Write-Host "🔧 Bearbeite $configFile..."
+        foreach ($file in $configFiles) {
+          if (Test-Path $file) {
+            Write-Host "🔧 Bearbeite $file"
+            $content = Get-Content $file -Raw
             
-            # Backup erstellen
-            Copy-Item $configFile "$configFile.backup"
+            # Server-Konfiguration
+            if ($content -match 'RENDEZVOUS_SERVERS') {
+              $content = $content -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];', "pub const RENDEZVOUS_SERVERS: &[&str] = &[`"${{ secrets.RENDEZVOUS_SERVER }}`"];"
+              Write-Host "✅ RENDEZVOUS_SERVER in $file gesetzt"
+            }
             
-            # Rendezvous Server konfigurieren
-            (Get-Content $configFile) -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];', "pub const RENDEZVOUS_SERVERS: &[&str] = &[`"${{ secrets.RENDEZVOUS_SERVER }}`"];" | Set-Content $configFile
+            # Public Key
+            if ($content -match 'RS_PUB_KEY|PUBLIC_RS_PUB_KEY') {
+              $content = $content -replace 'pub const (RS_PUB_KEY|PUBLIC_RS_PUB_KEY): &str = ".*?";', "pub const `$1: &str = `"${{ secrets.RS_PUB_KEY }}`";"
+              Write-Host "✅ RS_PUB_KEY in $file gesetzt"
+            }
             
-            # Public Key konfigurieren (verschiedene mögliche Variablennamen)
-            (Get-Content $configFile) -replace 'pub const PUBLIC_RS_PUB_KEY: &str = ".*?";', "pub const PUBLIC_RS_PUB_KEY: &str = `"${{ secrets.RS_PUB_KEY }}`";" | Set-Content $configFile
-            (Get-Content $configFile) -replace 'pub const RS_PUB_KEY: &str = ".*?";', "pub const RS_PUB_KEY: &str = `"${{ secrets.RS_PUB_KEY }}`";" | Set-Content $configFile
-            
-            Write-Host "✅ $configFile konfiguriert"
-          } else {
-            Write-Host "⚠️  $configFile nicht gefunden"
+            Set-Content $file $content -NoNewline
           }
         }
       shell: powershell
 
     - name: Build RustDesk
       run: |
-        # Intelligenter Build-Process für Windows
-        echo "🔍 Prüfe verfügbare Build-Optionen..."
+        Write-Host "🚀 Starte RustDesk Build..."
         
-        if (Test-Path "build.py") {
-          Write-Host "🐍 Python Build-Script gefunden"
-          if (Test-Path "flutter") {
-            Write-Host "🔥 Flutter Build wird gestartet..."
-            try {
-              python build.py --flutter
-            } catch {
-              Write-Host "Flutter build fehlgeschlagen, versuche Standard build..."
-              try {
-                python build.py
-              } catch {
-                Write-Host "Python build fehlgeschlagen, verwende Cargo..."
-                cargo build --release
-              }
+        # Versuche Flutter Build zuerst
+        if (Test-Path "flutter") {
+          Write-Host "📱 Flutter-Verzeichnis gefunden, versuche Flutter Build..."
+          
+          if (Test-Path "build.py") {
+            Write-Host "🐍 Build-Script gefunden, verwende build.py"
+            python build.py --flutter --hwcodec
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "⚠️ Flutter build fehlgeschlagen, versuche Standard build..."
+              python build.py
             }
           } else {
-            Write-Host "🦀 Standard Build wird gestartet..."
-            try {
-              python build.py
-            } catch {
-              Write-Host "Python build fehlgeschlagen, verwende Cargo..."
-              cargo build --release
-            }
+            Write-Host "🦀 Kein build.py gefunden, verwende Cargo direkt"
+            cargo build --release --bin rustdesk
           }
         } else {
-          Write-Host "🦀 Cargo Build wird gestartet..."
-          cargo build --release
+          Write-Host "🦀 Verwende direkten Cargo Build"
+          cargo build --release --bin rustdesk
         }
         
-    - name: Build installer (Windows)
-      run: |
-        # Suche nach fertigen Binaries und erstelle Artefakte
-        echo "📦 Erstelle Windows Installer..."
-        if (Test-Path "target/release/rustdesk.exe") {
-          Write-Host "✅ RustDesk Binary gefunden!"
-          # Optional: Installer erstellen falls Script vorhanden
-          if (Test-Path "res/msi/build.bat") {
-            try {
-              cd res/msi
-              .\build.bat
-              cd ../..
-            } catch {
-              Write-Host "⚠️ MSI Build fehlgeschlagen, aber Binary ist verfügbar"
-            }
-          }
-        } else {
-          Write-Host "❌ RustDesk Binary nicht gefunden in target/release/"
-          Get-ChildItem -Path "target" -Recurse -Name "rustdesk*" | Write-Host
+        # Zeige was gebaut wurde
+        Write-Host "📦 Gebaute Dateien:"
+        if (Test-Path "target\release") {
+          Get-ChildItem "target\release" -Name "*.exe" | ForEach-Object { Write-Host "  $_" }
         }
       shell: powershell
-      
+        
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: rustdesk-windows-custom
         path: |
-          target/release/rustdesk.exe
           target/release/*.exe
-          target/release/*.msi
+          target/release/bundle
+        if-no-files-found: warn
 
   build-linux:
     runs-on: ubuntu-latest
@@ -162,9 +130,16 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+      with:
+        submodules: recursive
+        
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
+      
+    - name: Install Python  
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
         
     - name: Install dependencies
       run: |
@@ -187,58 +162,73 @@ jobs:
           libudev-dev \
           libpam0g-dev \
           cmake \
-          git
-          
+          git \
+          gcc \
+          g++ \
+          libc6-dev \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev
+
     - name: Configure custom settings
+      env:
+        RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+        RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
       run: |
-        # Debug: Zeige Projektstruktur
-        echo "📁 Projektstruktur:"
-        find . -maxdepth 3 -name "*.rs" -path "*/config*" -o -name "config.rs" | head -10
-        
-        # Konfiguration für Linux
-        if [ -f "libs/hbb_common/src/config.rs" ]; then
-          echo "🔧 Bearbeite libs/hbb_common/src/config.rs..."
-          cp libs/hbb_common/src/config.rs libs/hbb_common/src/config.rs.backup
-          sed -i 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' libs/hbb_common/src/config.rs
-          sed -i 's/pub const PUBLIC_RS_PUB_KEY: &str = ".*";/pub const PUBLIC_RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' libs/hbb_common/src/config.rs
-          sed -i 's/pub const RS_PUB_KEY: &str = ".*";/pub const RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' libs/hbb_common/src/config.rs
-          echo "✅ libs/hbb_common/src/config.rs konfiguriert"
-        else
-          echo "⚠️  libs/hbb_common/src/config.rs nicht gefunden"
-        fi
-        
-        if [ -f "src/config.rs" ]; then
-          echo "🔧 Bearbeite src/config.rs..."
-          cp src/config.rs src/config.rs.backup
-          sed -i 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' src/config.rs
-          sed -i 's/pub const PUBLIC_RS_PUB_KEY: &str = ".*";/pub const PUBLIC_RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' src/config.rs
-          sed -i 's/pub const RS_PUB_KEY: &str = ".*";/pub const RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' src/config.rs
-          echo "✅ src/config.rs konfiguriert"
-        else
-          echo "⚠️  src/config.rs nicht gefunden"
-        fi
-        
-        # Umgebungsvariablen setzen (wichtig für Build-Process)
+        # Setze Build-Umgebungsvariablen
         echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" >> $GITHUB_ENV
         echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" >> $GITHUB_ENV
         
+        # Suche Konfigurationsdateien
+        echo "🔍 Suche nach Konfigurationsdateien..."
+        find . -name "config.rs" -type f | head -5
+        
+        # Bearbeite Konfigurationsdateien
+        config_files=(
+          "libs/hbb_common/src/config.rs"
+          "src/config.rs"
+        )
+        
+        for file in "${config_files[@]}"; do
+          if [ -f "$file" ]; then
+            echo "🔧 Bearbeite $file"
+            
+            # Backup erstellen
+            cp "$file" "$file.backup"
+            
+            # Server konfigurieren
+            if grep -q "RENDEZVOUS_SERVERS" "$file"; then
+              sed -i 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' "$file"
+              echo "✅ RENDEZVOUS_SERVER in $file gesetzt"
+            fi
+            
+            # Public Key konfigurieren
+            if grep -q "RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
+              sed -i 's/pub const \(RS_PUB_KEY\|PUBLIC_RS_PUB_KEY\): &str = ".*";/pub const \1: \&str = "${{ secrets.RS_PUB_KEY }}";/' "$file"
+              echo "✅ RS_PUB_KEY in $file gesetzt"
+            fi
+          fi
+        done
+
     - name: Build RustDesk
       run: |
-        # Intelligenter Build-Process
-        echo "🔍 Prüfe verfügbare Build-Optionen..."
+        echo "🚀 Starte RustDesk Build..."
         
-        if [ -f "build.py" ]; then
-          echo "🐍 Python Build-Script gefunden"
-          if [ -d "flutter" ]; then
-            echo "🔥 Flutter Build wird gestartet..."
-            python3 build.py --flutter || python3 build.py || cargo build --release
-          else
-            echo "🦀 Standard Build wird gestartet..."
-            python3 build.py || cargo build --release
-          fi
+        # Versuche verschiedene Build-Methoden
+        if [ -f "build.py" ] && [ -d "flutter" ]; then
+          echo "📱 Flutter Build..."
+          python3 build.py --flutter || python3 build.py || cargo build --release --bin rustdesk
+        elif [ -f "build.py" ]; then
+          echo "🐍 Python Build..."
+          python3 build.py || cargo build --release --bin rustdesk
         else
-          echo "🦀 Cargo Build wird gestartet..."
-          cargo build --release
+          echo "🦀 Cargo Build..."
+          cargo build --release --bin rustdesk
+        fi
+        
+        # Zeige gebaute Dateien
+        echo "📦 Gebaute Dateien:"
+        if [ -d "target/release" ]; then
+          ls -la target/release/ | grep -E "(rustdesk|\.deb|\.appimage)"
         fi
         
     - name: Upload artifacts
@@ -248,7 +238,9 @@ jobs:
         name: rustdesk-linux-custom
         path: |
           target/release/rustdesk
-          target/release/rustdesk-*
+          target/release/*.deb
+          target/release/*.AppImage
+        if-no-files-found: warn
 
   build-macos:
     runs-on: macos-latest
@@ -256,60 +248,77 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+      with:
+        submodules: recursive
+        
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
-        
+      
+    - name: Install Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
     - name: Configure custom settings
+      env:
+        RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+        RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
       run: |
-        # Debug: Zeige Projektstruktur
-        echo "📁 Projektstruktur:"
-        find . -maxdepth 3 -name "*.rs" -path "*/config*" -o -name "config.rs" | head -10
-        
-        # Konfiguration für macOS
-        if [ -f "libs/hbb_common/src/config.rs" ]; then
-          echo "🔧 Bearbeite libs/hbb_common/src/config.rs..."
-          cp libs/hbb_common/src/config.rs libs/hbb_common/src/config.rs.backup
-          sed -i '' 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' libs/hbb_common/src/config.rs
-          sed -i '' 's/pub const PUBLIC_RS_PUB_KEY: &str = ".*";/pub const PUBLIC_RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' libs/hbb_common/src/config.rs
-          sed -i '' 's/pub const RS_PUB_KEY: &str = ".*";/pub const RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' libs/hbb_common/src/config.rs
-          echo "✅ libs/hbb_common/src/config.rs konfiguriert"
-        else
-          echo "⚠️  libs/hbb_common/src/config.rs nicht gefunden"
-        fi
-        
-        if [ -f "src/config.rs" ]; then
-          echo "🔧 Bearbeite src/config.rs..."
-          cp src/config.rs src/config.rs.backup
-          sed -i '' 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' src/config.rs
-          sed -i '' 's/pub const PUBLIC_RS_PUB_KEY: &str = ".*";/pub const PUBLIC_RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' src/config.rs
-          sed -i '' 's/pub const RS_PUB_KEY: &str = ".*";/pub const RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' src/config.rs
-          echo "✅ src/config.rs konfiguriert"
-        else
-          echo "⚠️  src/config.rs nicht gefunden"
-        fi
-        
-        # Umgebungsvariablen setzen (wichtig für Build-Process)
+        # Setze Build-Umgebungsvariablen
         echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" >> $GITHUB_ENV
         echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" >> $GITHUB_ENV
         
+        # Suche Konfigurationsdateien
+        echo "🔍 Suche nach Konfigurationsdateien..."
+        find . -name "config.rs" -type f | head -5
+        
+        # Bearbeite Konfigurationsdateien
+        config_files=(
+          "libs/hbb_common/src/config.rs"
+          "src/config.rs"
+        )
+        
+        for file in "${config_files[@]}"; do
+          if [ -f "$file" ]; then
+            echo "🔧 Bearbeite $file"
+            
+            # Backup erstellen
+            cp "$file" "$file.backup"
+            
+            # Server konfigurieren (macOS sed syntax)
+            if grep -q "RENDEZVOUS_SERVERS" "$file"; then
+              sed -i '' 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' "$file"
+              echo "✅ RENDEZVOUS_SERVER in $file gesetzt"
+            fi
+            
+            # Public Key konfigurieren (macOS sed syntax)
+            if grep -q "RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
+              sed -i '' 's/pub const \(RS_PUB_KEY\|PUBLIC_RS_PUB_KEY\): &str = ".*";/pub const \1: \&str = "${{ secrets.RS_PUB_KEY }}";/' "$file"
+              echo "✅ RS_PUB_KEY in $file gesetzt"
+            fi
+          fi
+        done
+
     - name: Build RustDesk
       run: |
-        # Intelligenter Build-Process für macOS
-        echo "🔍 Prüfe verfügbare Build-Optionen..."
+        echo "🚀 Starte RustDesk Build..."
         
-        if [ -f "build.py" ]; then
-          echo "🐍 Python Build-Script gefunden"
-          if [ -d "flutter" ]; then
-            echo "🔥 Flutter Build wird gestartet..."
-            python3 build.py --flutter || python3 build.py || cargo build --release
-          else
-            echo "🦀 Standard Build wird gestartet..."
-            python3 build.py || cargo build --release
-          fi
+        # Versuche verschiedene Build-Methoden
+        if [ -f "build.py" ] && [ -d "flutter" ]; then
+          echo "📱 Flutter Build..."
+          python3 build.py --flutter || python3 build.py || cargo build --release --bin rustdesk
+        elif [ -f "build.py" ]; then
+          echo "🐍 Python Build..."
+          python3 build.py || cargo build --release --bin rustdesk
         else
-          echo "🦀 Cargo Build wird gestartet..."
-          cargo build --release
+          echo "🦀 Cargo Build..."
+          cargo build --release --bin rustdesk
+        fi
+        
+        # Zeige gebaute Dateien
+        echo "📦 Gebaute Dateien:"
+        if [ -d "target/release" ]; then
+          ls -la target/release/ | grep -E "(rustdesk|\.app|\.dmg)"
         fi
         
     - name: Upload artifacts
@@ -319,5 +328,6 @@ jobs:
         name: rustdesk-macos-custom
         path: |
           target/release/rustdesk
-          target/release/rustdesk-*
           target/release/*.app
+          target/release/*.dmg
+        if-no-files-found: warn
