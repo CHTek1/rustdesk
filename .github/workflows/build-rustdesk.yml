@@ -8,181 +8,216 @@ on:
   workflow_dispatch:
 
 env:
-  CARGO_TERM_COLOR: always
+  SCITER_RUST_VERSION: "1.75"
+  RUST_VERSION: "1.75" 
+  MAC_RUST_VERSION: "1.81"
+  LLVM_VERSION: "15.0.6"
+  FLUTTER_VERSION: "3.24.5"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_COMMIT_ID: "485b23ac13e8c0b3004d6bb73fc3ead5e5fc5d22"
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  # Einfacher Test-Build nur für Windows erstmal
+  build-windows-simple:
+    name: Windows Simple Build
+    runs-on: windows-2022
     
     steps:
-    - name: Checkout code
+    - name: Checkout source code
       uses: actions/checkout@v4
       with:
         submodules: recursive
-        
+
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@v1.75.0
       with:
         components: rustfmt, clippy
-        
-    - name: Install Python
-      uses: actions/setup-python@v4
+
+    - name: Install LLVM and Clang
+      uses: KyleMayes/install-llvm-action@v1
       with:
-        python-version: '3.11'
-        
-    - name: Install dependencies
+        version: ${{ env.LLVM_VERSION }}
+
+    - name: Install Flutter
+      uses: subosito/flutter-action@v2.12.0
+      with:
+        channel: "stable"
+        flutter-version: ${{ env.FLUTTER_VERSION }}
+
+    - name: Setup vcpkg
       run: |
-        # LLVM für Windows
-        choco install llvm -y
-        
-        # vcpkg für Libraries
-        git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
-        C:\vcpkg\bootstrap-vcpkg.bat
-        C:\vcpkg\vcpkg.exe install libvpx:x64-windows libyuv:x64-windows opus:x64-windows
-        echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        
+        git clone https://github.com/Microsoft/vcpkg.git
+        cd vcpkg
+        git checkout ${{ env.VCPKG_COMMIT_ID }}
+        .\bootstrap-vcpkg.bat
+        echo "VCPKG_ROOT=${{ github.workspace }}\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      shell: powershell
+
+    - name: Install vcpkg dependencies  
+      run: |
+        $env:VCPKG_ROOT = "${{ github.workspace }}\vcpkg"
+        & $env:VCPKG_ROOT\vcpkg.exe install --triplet x64-windows-static --x-install-root="$env:VCPKG_ROOT\installed"
+      shell: powershell
+
     - name: Configure custom settings
       env:
         RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
         RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
       run: |
-        # Setze Build-Umgebungsvariablen
+        # Debug: Zeige verfügbare Dateien
+        Write-Host "🔍 Projektstruktur:"
+        Get-ChildItem -Recurse -Include "config.rs" | Select-Object FullName
+        
+        # Umgebungsvariablen für Build setzen
         echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         
-        # Suche nach Konfigurationsdateien
-        Write-Host "🔍 Suche nach Konfigurationsdateien..."
-        Get-ChildItem -Recurse -Name "config.rs" | ForEach-Object { Write-Host "Gefunden: $_" }
-        
-        # Bearbeite Konfigurationsdateien falls gefunden
+        # Konfigurationsdateien modifizieren
         $configFiles = @(
           "libs\hbb_common\src\config.rs",
-          "src\config.rs",
-          "flutter\lib\common.dart"
+          "src\config.rs"
         )
         
         foreach ($file in $configFiles) {
           if (Test-Path $file) {
             Write-Host "🔧 Bearbeite $file"
-            $content = Get-Content $file -Raw
+            $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
             
-            # Server-Konfiguration
-            if ($content -match 'RENDEZVOUS_SERVERS') {
-              $content = $content -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];', "pub const RENDEZVOUS_SERVERS: &[&str] = &[`"${{ secrets.RENDEZVOUS_SERVER }}`"];"
-              Write-Host "✅ RENDEZVOUS_SERVER in $file gesetzt"
+            if ($content) {
+              # Backup erstellen
+              Copy-Item $file "$file.backup" -ErrorAction SilentlyContinue
+              
+              # Server konfigurieren (nur wenn Pattern gefunden wird)
+              if ($content -match 'RENDEZVOUS_SERVERS') {
+                $content = $content -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];', "pub const RENDEZVOUS_SERVERS: &[&str] = &[`"${{ secrets.RENDEZVOUS_SERVER }}`"];"
+                Write-Host "✅ RENDEZVOUS_SERVER gesetzt in $file"
+              }
+              
+              # Public Key (nur wenn Pattern gefunden wird)
+              if ($content -match 'RS_PUB_KEY|PUBLIC_RS_PUB_KEY') {
+                $content = $content -replace 'pub const (RS_PUB_KEY|PUBLIC_RS_PUB_KEY): &str = ".*?";', "pub const `$1: &str = `"${{ secrets.RS_PUB_KEY }}`";"
+                Write-Host "✅ RS_PUB_KEY gesetzt in $file"
+              }
+              
+              # Schreibe zurück
+              Set-Content $file $content -NoNewline -ErrorAction SilentlyContinue
             }
-            
-            # Public Key
-            if ($content -match 'RS_PUB_KEY|PUBLIC_RS_PUB_KEY') {
-              $content = $content -replace 'pub const (RS_PUB_KEY|PUBLIC_RS_PUB_KEY): &str = ".*?";', "pub const `$1: &str = `"${{ secrets.RS_PUB_KEY }}`";"
-              Write-Host "✅ RS_PUB_KEY in $file gesetzt"
-            }
-            
-            Set-Content $file $content -NoNewline
+          } else {
+            Write-Host "⚠️ $file nicht gefunden"
           }
         }
       shell: powershell
 
-    - name: Build RustDesk
+    - name: Replace engine with rustdesk custom flutter engine
+      run: |
+        flutter doctor -v
+        flutter precache --windows
+        Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+        Expand-Archive windows-x64-release.zip -DestinationPath engine
+        Move-Item "engine/*" "C:\hostedtoolcache\windows\flutter\stable-${{ env.FLUTTER_VERSION }}-x64\bin\cache\artifacts\engine\windows-x64-release\" -Force
+      shell: powershell
+
+    - name: Build rustdesk
       run: |
         Write-Host "🚀 Starte RustDesk Build..."
         
-        # Versuche Flutter Build zuerst
-        if (Test-Path "flutter") {
-          Write-Host "📱 Flutter-Verzeichnis gefunden, versuche Flutter Build..."
-          
-          if (Test-Path "build.py") {
-            Write-Host "🐍 Build-Script gefunden, verwende build.py"
-            python build.py --flutter --hwcodec
-            if ($LASTEXITCODE -ne 0) {
-              Write-Host "⚠️ Flutter build fehlgeschlagen, versuche Standard build..."
-              python build.py
-            }
-          } else {
-            Write-Host "🦀 Kein build.py gefunden, verwende Cargo direkt"
-            cargo build --release --bin rustdesk
-          }
+        # Verwende das offizielle Build-Script
+        python3 .\build.py --portable --hwcodec --flutter --vram --skip-portable-pack
+        
+        Write-Host "📦 Build abgeschlossen. Prüfe Ausgabe..."
+        if (Test-Path "flutter\build\windows\x64\runner\Release") {
+          Write-Host "✅ Flutter Release Build gefunden!"
+          Move-Item "flutter\build\windows\x64\runner\Release" "rustdesk-release"
+          Get-ChildItem "rustdesk-release" | ForEach-Object { Write-Host "  - $($_.Name)" }
         } else {
-          Write-Host "🦀 Verwende direkten Cargo Build"
-          cargo build --release --bin rustdesk
+          Write-Host "❌ Flutter Release Build nicht gefunden"
+          Write-Host "Verfügbare Dateien im flutter/build Verzeichnis:"
+          if (Test-Path "flutter\build") {
+            Get-ChildItem -Recurse "flutter\build" | Where-Object { $_.Name -like "*.exe" } | ForEach-Object { Write-Host "  - $($_.FullName)" }
+          }
         }
         
-        # Zeige was gebaut wurde
-        Write-Host "📦 Gebaute Dateien:"
+        # Fallback: Prüfe target/release
         if (Test-Path "target\release") {
-          Get-ChildItem "target\release" -Name "*.exe" | ForEach-Object { Write-Host "  $_" }
+          Write-Host "Dateien in target/release:"
+          Get-ChildItem "target\release" | ForEach-Object { Write-Host "  - $($_.Name)" }
         }
       shell: powershell
-        
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: rustdesk-windows-custom
         path: |
+          rustdesk-release/
           target/release/*.exe
-          target/release/bundle
         if-no-files-found: warn
 
-  build-linux:
-    runs-on: ubuntu-latest
+  # Linux Build (vereinfacht)
+  build-linux-simple:
+    name: Linux Simple Build
+    runs-on: ubuntu-20.04
     
     steps:
-    - name: Checkout code
+    - name: Checkout source code
       uses: actions/checkout@v4
       with:
         submodules: recursive
-        
+
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-      
-    - name: Install Python  
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-        
+      uses: dtolnay/rust-toolchain@v1.75.0
+
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          build-essential \
           curl \
           wget \
-          file \
-          libssl-dev \
+          git \
+          nasm \
+          yasm \
           libgtk-3-dev \
-          libayatana-appindicator3-dev \
-          librsvg2-dev \
-          libasound2-dev \
           libxcb-randr0-dev \
           libxdo-dev \
           libxfixes-dev \
           libxcb-shape0-dev \
           libxcb-xfixes0-dev \
-          libudev-dev \
-          libpam0g-dev \
+          libasound2-dev \
+          libpulse-dev \
           cmake \
-          git \
-          gcc \
-          g++ \
-          libc6-dev \
+          make \
+          libclang-dev \
+          ninja-build \
           libgstreamer1.0-dev \
-          libgstreamer-plugins-base1.0-dev
+          libgstreamer-plugins-base1.0-dev \
+          libpam0g-dev \
+          libayatana-appindicator3-dev \
+          zip \
+          g++ \
+          gcc \
+          libc6-dev
+
+    - name: Install Flutter
+      uses: subosito/flutter-action@v2.12.0
+      with:
+        channel: "stable"
+        flutter-version: ${{ env.FLUTTER_VERSION }}
 
     - name: Configure custom settings
       env:
         RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
         RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
       run: |
-        # Setze Build-Umgebungsvariablen
+        # Debug: Zeige verfügbare Dateien  
+        echo "🔍 Projektstruktur:"
+        find . -name "config.rs" -type f | head -5
+        
+        # Umgebungsvariablen für Build setzen
         echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" >> $GITHUB_ENV
         echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" >> $GITHUB_ENV
         
-        # Suche Konfigurationsdateien
-        echo "🔍 Suche nach Konfigurationsdateien..."
-        find . -name "config.rs" -type f | head -5
-        
-        # Bearbeite Konfigurationsdateien
+        # Konfigurationsdateien modifizieren
         config_files=(
           "libs/hbb_common/src/config.rs"
           "src/config.rs"
@@ -195,139 +230,51 @@ jobs:
             # Backup erstellen
             cp "$file" "$file.backup"
             
-            # Server konfigurieren
+            # Server konfigurieren (nur wenn Pattern vorhanden)
             if grep -q "RENDEZVOUS_SERVERS" "$file"; then
               sed -i 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' "$file"
-              echo "✅ RENDEZVOUS_SERVER in $file gesetzt"
+              echo "✅ RENDEZVOUS_SERVER gesetzt in $file"
             fi
             
-            # Public Key konfigurieren
+            # Public Key konfigurieren (nur wenn Pattern vorhanden)
             if grep -q "RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
               sed -i 's/pub const \(RS_PUB_KEY\|PUBLIC_RS_PUB_KEY\): &str = ".*";/pub const \1: \&str = "${{ secrets.RS_PUB_KEY }}";/' "$file"
-              echo "✅ RS_PUB_KEY in $file gesetzt"
+              echo "✅ RS_PUB_KEY gesetzt in $file"
             fi
+          else
+            echo "⚠️ $file nicht gefunden"
           fi
         done
 
-    - name: Build RustDesk
+    - name: Build rustdesk
       run: |
         echo "🚀 Starte RustDesk Build..."
         
-        # Versuche verschiedene Build-Methoden
-        if [ -f "build.py" ] && [ -d "flutter" ]; then
-          echo "📱 Flutter Build..."
-          python3 build.py --flutter || python3 build.py || cargo build --release --bin rustdesk
-        elif [ -f "build.py" ]; then
-          echo "🐍 Python Build..."
-          python3 build.py || cargo build --release --bin rustdesk
+        # Verwende das offizielle Build-Script
+        if [ -f "build.py" ]; then
+          echo "🐍 Verwende build.py"
+          python3 build.py --flutter
         else
-          echo "🦀 Cargo Build..."
-          cargo build --release --bin rustdesk
+          echo "🦀 Verwende direkten Cargo Build"
+          cargo build --release --features inline,vram,hwcodec --bins
         fi
         
-        # Zeige gebaute Dateien
-        echo "📦 Gebaute Dateien:"
-        if [ -d "target/release" ]; then
-          ls -la target/release/ | grep -E "(rustdesk|\.deb|\.appimage)"
-        fi
+        echo "📦 Build abgeschlossen. Prüfe Ausgabe..."
         
+        # Prüfe verschiedene Output-Verzeichnisse
+        for dir in "flutter/build/linux/x64/release/bundle" "target/release"; do
+          if [ -d "$dir" ]; then
+            echo "✅ Gefunden: $dir"
+            find "$dir" -name "rustdesk*" -type f | head -5
+          fi
+        done
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: rustdesk-linux-custom
         path: |
+          flutter/build/linux/x64/release/bundle/
           target/release/rustdesk
-          target/release/*.deb
-          target/release/*.AppImage
-        if-no-files-found: warn
-
-  build-macos:
-    runs-on: macos-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-      
-    - name: Install Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11'
-
-    - name: Configure custom settings
-      env:
-        RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
-        RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
-      run: |
-        # Setze Build-Umgebungsvariablen
-        echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" >> $GITHUB_ENV
-        echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" >> $GITHUB_ENV
-        
-        # Suche Konfigurationsdateien
-        echo "🔍 Suche nach Konfigurationsdateien..."
-        find . -name "config.rs" -type f | head -5
-        
-        # Bearbeite Konfigurationsdateien
-        config_files=(
-          "libs/hbb_common/src/config.rs"
-          "src/config.rs"
-        )
-        
-        for file in "${config_files[@]}"; do
-          if [ -f "$file" ]; then
-            echo "🔧 Bearbeite $file"
-            
-            # Backup erstellen
-            cp "$file" "$file.backup"
-            
-            # Server konfigurieren (macOS sed syntax)
-            if grep -q "RENDEZVOUS_SERVERS" "$file"; then
-              sed -i '' 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' "$file"
-              echo "✅ RENDEZVOUS_SERVER in $file gesetzt"
-            fi
-            
-            # Public Key konfigurieren (macOS sed syntax)
-            if grep -q "RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
-              sed -i '' 's/pub const \(RS_PUB_KEY\|PUBLIC_RS_PUB_KEY\): &str = ".*";/pub const \1: \&str = "${{ secrets.RS_PUB_KEY }}";/' "$file"
-              echo "✅ RS_PUB_KEY in $file gesetzt"
-            fi
-          fi
-        done
-
-    - name: Build RustDesk
-      run: |
-        echo "🚀 Starte RustDesk Build..."
-        
-        # Versuche verschiedene Build-Methoden
-        if [ -f "build.py" ] && [ -d "flutter" ]; then
-          echo "📱 Flutter Build..."
-          python3 build.py --flutter || python3 build.py || cargo build --release --bin rustdesk
-        elif [ -f "build.py" ]; then
-          echo "🐍 Python Build..."
-          python3 build.py || cargo build --release --bin rustdesk
-        else
-          echo "🦀 Cargo Build..."
-          cargo build --release --bin rustdesk
-        fi
-        
-        # Zeige gebaute Dateien
-        echo "📦 Gebaute Dateien:"
-        if [ -d "target/release" ]; then
-          ls -la target/release/ | grep -E "(rustdesk|\.app|\.dmg)"
-        fi
-        
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: rustdesk-macos-custom
-        path: |
-          target/release/rustdesk
-          target/release/*.app
-          target/release/*.dmg
         if-no-files-found: warn
