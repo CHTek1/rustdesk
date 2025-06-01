@@ -29,7 +29,7 @@ jobs:
 
     - name: Install system dependencies
       run: |
-        echo "📦 Installiere System Dependencies..."
+        echo "Installing system dependencies..."
         sudo apt-get update
         sudo apt-get install -y \
           pkg-config \
@@ -55,109 +55,97 @@ jobs:
         RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
         RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
       run: |
-        echo "🔧 Konfiguriere Custom RustDesk Settings..."
+        echo "Configuring custom RustDesk settings..."
         
-        # Prüfe Secrets
-        if [ -z "${{ secrets.RENDEZVOUS_SERVER }}" ]; then
-          echo "⚠️ RENDEZVOUS_SERVER Secret nicht gesetzt - verwende Standard"
+        # Check secrets
+        if [ -z "$RENDEZVOUS_SERVER" ]; then
+          echo "WARNING: RENDEZVOUS_SERVER secret not set - using default"
         else
-          echo "✅ RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}"
+          echo "SUCCESS: RENDEZVOUS_SERVER configured"
         fi
         
-        if [ -z "${{ secrets.RS_PUB_KEY }}" ]; then
-          echo "⚠️ RS_PUB_KEY Secret nicht gesetzt - verwende Standard"
+        if [ -z "$RS_PUB_KEY" ]; then
+          echo "WARNING: RS_PUB_KEY secret not set - using default"
         else
-          echo "✅ RS_PUB_KEY: $(echo "${{ secrets.RS_PUB_KEY }}" | cut -c1-20)..."
+          echo "SUCCESS: RS_PUB_KEY configured"
         fi
         
-        # Setze Build-Umgebungsvariablen
-        echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" >> $GITHUB_ENV
-        echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" >> $GITHUB_ENV
+        # Set build environment variables
+        echo "RENDEZVOUS_SERVER=$RENDEZVOUS_SERVER" >> $GITHUB_ENV
+        echo "RS_PUB_KEY=$RS_PUB_KEY" >> $GITHUB_ENV
         
-        # Finde und modifiziere Config-Dateien
-        echo ""
-        echo "🔍 Suche Config-Dateien..."
+        # Find and modify config files
+        echo "Searching for config files..."
         find . -name "config.rs" -type f | while read file; do
-          echo "📄 Gefunden: $file"
+          echo "Found config file: $file"
           
-          # Prüfe ob relevante Konstanten vorhanden sind
           if grep -q "RENDEZVOUS_SERVERS\|RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
-            echo "  🔧 Bearbeite $file..."
+            echo "  Modifying $file..."
             
-            # Backup erstellen
+            # Create backup
             cp "$file" "$file.backup"
             
-            # Server konfigurieren (nur wenn Secret gesetzt und Pattern vorhanden)
-            if [ -n "${{ secrets.RENDEZVOUS_SERVER }}" ] && grep -q "RENDEZVOUS_SERVERS" "$file"; then
-              sed -i 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' "$file"
-              echo "    ✅ RENDEZVOUS_SERVER konfiguriert"
+            # Configure server (only if secret is set and pattern exists)
+            if [ -n "$RENDEZVOUS_SERVER" ] && grep -q "RENDEZVOUS_SERVERS" "$file"; then
+              sed -i "s|pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];|pub const RENDEZVOUS_SERVERS: \&[\&str] = \&[\"$RENDEZVOUS_SERVER\"];|" "$file"
+              echo "    Server configured"
             fi
             
-            # Public Key konfigurieren (nur wenn Secret gesetzt und Pattern vorhanden)
-            if [ -n "${{ secrets.RS_PUB_KEY }}" ] && grep -q "RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
-              sed -i 's/pub const \(RS_PUB_KEY\|PUBLIC_RS_PUB_KEY\): &str = ".*";/pub const \1: \&str = "${{ secrets.RS_PUB_KEY }}";/' "$file"
-              echo "    ✅ RS_PUB_KEY konfiguriert"
+            # Configure public key (only if secret is set and pattern exists)
+            if [ -n "$RS_PUB_KEY" ] && grep -q "RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
+              sed -i "s|pub const \(RS_PUB_KEY\|PUBLIC_RS_PUB_KEY\): &str = \".*\";|pub const \1: \&str = \"$RS_PUB_KEY\";|" "$file"
+              echo "    Public key configured"
             fi
-            
-            # Zeige Änderungen
-            echo "    📋 Relevante Zeilen nach Änderung:"
-            grep -n "RENDEZVOUS_SERVERS\|RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file" | head -3 | sed 's/^/      /'
           else
-            echo "  ℹ️ Keine relevanten Konstanten gefunden"
+            echo "  No relevant constants found"
           fi
         done
 
     - name: Build RustDesk
       run: |
-        echo "🚀 Starte RustDesk Build..."
-        echo "Build-Umgebung:"
+        echo "Starting RustDesk build..."
+        echo "Build environment:"
         echo "  Rust: $(rustc --version)"
         echo "  Cargo: $(cargo --version)"
         
-        # Build mit detailliertem Output
-        echo ""
-        echo "🔨 Führe cargo build --release aus..."
+        echo "Running cargo build --release..."
         if cargo build --release --verbose 2>&1 | tee build.log; then
-          echo ""
-          echo "🎉 BUILD ERFOLGREICH!"
+          echo "BUILD SUCCESSFUL!"
           
-          echo ""
-          echo "📦 Gebaute Binaries:"
-          find target/release -type f -executable 2>/dev/null | while read file; do
-            if [ -f "$file" ]; then
-              size=$(du -h "$file" | cut -f1)
-              echo "  ✅ $file ($size)"
-            fi
-          done
-          
-          # Prüfe spezifisch auf rustdesk binary
-          if [ -f "target/release/rustdesk" ]; then
-            echo ""
-            echo "✅ RustDesk Binary erfolgreich erstellt!"
-            ls -la target/release/rustdesk
-            file target/release/rustdesk
+          echo "Built binaries:"
+          if [ -d "target/release" ]; then
+            find target/release -type f -executable 2>/dev/null | while read file; do
+              if [ -f "$file" ]; then
+                size=$(du -h "$file" | cut -f1)
+                echo "  $file ($size)"
+              fi
+            done
           fi
           
+          # Check specifically for rustdesk binary
+          if [ -f "target/release/rustdesk" ]; then
+            echo "RustDesk binary successfully created!"
+            ls -la target/release/rustdesk
+          fi
         else
-          echo ""
-          echo "❌ BUILD FEHLGESCHLAGEN"
-          echo "Letzte Fehlermeldungen:"
-          tail -20 build.log | sed 's/^/  /'
+          echo "BUILD FAILED"
+          echo "Last error messages:"
+          tail -20 build.log
           exit 1
         fi
 
     - name: Create release package
       run: |
-        echo "📦 Erstelle Release-Paket..."
+        echo "Creating release package..."
         
         if [ -f "target/release/rustdesk" ]; then
-          # Erstelle Release-Verzeichnis
+          # Create release directory
           mkdir -p rustdesk-linux-release
           
-          # Kopiere Binary
+          # Copy binary
           cp target/release/rustdesk rustdesk-linux-release/
           
-          # Erstelle Info-Datei
+          # Create info file
           cat > rustdesk-linux-release/BUILD_INFO.txt << EOF
 RustDesk Custom Build
 ====================
@@ -167,21 +155,21 @@ Build environment: Ubuntu 22.04
 Rust version: $(rustc --version)
 
 Custom Configuration:
-- RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER || 'default' }}
-- RS_PUB_KEY: $([ -n "${{ secrets.RS_PUB_KEY }}" ] && echo "configured" || echo "default")
+- RENDEZVOUS_SERVER: ${RENDEZVOUS_SERVER:-default}
+- RS_PUB_KEY: $([ -n "$RS_PUB_KEY" ] && echo "configured" || echo "default")
 
 Usage:
   chmod +x rustdesk
   ./rustdesk
 EOF
           
-          # Mache Binary ausführbar
+          # Make binary executable
           chmod +x rustdesk-linux-release/rustdesk
           
-          echo "✅ Release-Paket erstellt:"
+          echo "Release package created:"
           ls -la rustdesk-linux-release/
         else
-          echo "❌ Kein rustdesk binary gefunden"
+          echo "No rustdesk binary found"
           exit 1
         fi
 
@@ -221,81 +209,78 @@ EOF
       env:
         RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
         RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+      shell: powershell
       run: |
-        Write-Host "Konfiguriere Custom RustDesk Settings..."
+        Write-Host "Configuring custom RustDesk settings..."
         
-        # Pruefe Secrets
-        if ([string]::IsNullOrEmpty("${{ secrets.RENDEZVOUS_SERVER }}")) {
-          Write-Host "RENDEZVOUS_SERVER Secret nicht gesetzt - verwende Standard"
+        # Check secrets
+        $serverSet = ![string]::IsNullOrEmpty($env:RENDEZVOUS_SERVER)
+        $keySet = ![string]::IsNullOrEmpty($env:RS_PUB_KEY)
+        
+        if (!$serverSet) {
+          Write-Host "WARNING: RENDEZVOUS_SERVER secret not set - using default"
         } else {
-          Write-Host "RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}"
+          Write-Host "SUCCESS: RENDEZVOUS_SERVER configured"
         }
         
-        if ([string]::IsNullOrEmpty("${{ secrets.RS_PUB_KEY }}")) {
-          Write-Host "RS_PUB_KEY Secret nicht gesetzt - verwende Standard"  
+        if (!$keySet) {
+          Write-Host "WARNING: RS_PUB_KEY secret not set - using default"
         } else {
-          $keyLength = "${{ secrets.RS_PUB_KEY }}".Length
-          $previewLength = [Math]::Min(20, $keyLength)
-          $keyPreview = "${{ secrets.RS_PUB_KEY }}".Substring(0, $previewLength)
-          Write-Host "RS_PUB_KEY: $keyPreview..."
+          Write-Host "SUCCESS: RS_PUB_KEY configured"
         }
         
-        # Setze Build-Umgebungsvariablen
-        echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-        echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        # Set build environment variables
+        Add-Content $env:GITHUB_ENV "RENDEZVOUS_SERVER=$env:RENDEZVOUS_SERVER"
+        Add-Content $env:GITHUB_ENV "RS_PUB_KEY=$env:RS_PUB_KEY"
         
-        # Finde und modifiziere Config-Dateien
-        Write-Host ""
-        Write-Host "Suche Config-Dateien..."
+        # Find and modify config files
+        Write-Host "Searching for config files..."
         Get-ChildItem -Recurse -Include "config.rs" | ForEach-Object {
           $file = $_.FullName
-          Write-Host "Gefunden: $file"
+          Write-Host "Found config file: $file"
           
           $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
           if ($content -and ($content -match 'RENDEZVOUS_SERVERS|RS_PUB_KEY|PUBLIC_RS_PUB_KEY')) {
-            Write-Host "  Bearbeite $file..."
+            Write-Host "  Modifying $file..."
             
-            # Backup erstellen
+            # Create backup
             Copy-Item $file "$file.backup" -ErrorAction SilentlyContinue
             
-            # Server konfigurieren
-            if (![string]::IsNullOrEmpty("${{ secrets.RENDEZVOUS_SERVER }}") -and $content -match 'RENDEZVOUS_SERVERS') {
-              $content = $content -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];', "pub const RENDEZVOUS_SERVERS: &[&str] = &[`"${{ secrets.RENDEZVOUS_SERVER }}`"];"
-              Write-Host "    RENDEZVOUS_SERVER konfiguriert"
+            # Configure server
+            if ($serverSet -and $content -match 'RENDEZVOUS_SERVERS') {
+              $content = $content -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];', "pub const RENDEZVOUS_SERVERS: &[&str] = &[`"$env:RENDEZVOUS_SERVER`"];"
+              Write-Host "    Server configured"
             }
             
-            # Public Key konfigurieren
-            if (![string]::IsNullOrEmpty("${{ secrets.RS_PUB_KEY }}") -and $content -match 'RS_PUB_KEY|PUBLIC_RS_PUB_KEY') {
-              $content = $content -replace 'pub const (RS_PUB_KEY|PUBLIC_RS_PUB_KEY): &str = ".*?";', "pub const `$1: &str = `"${{ secrets.RS_PUB_KEY }}`";"
-              Write-Host "    RS_PUB_KEY konfiguriert"
+            # Configure public key
+            if ($keySet -and $content -match 'RS_PUB_KEY|PUBLIC_RS_PUB_KEY') {
+              $content = $content -replace 'pub const (RS_PUB_KEY|PUBLIC_RS_PUB_KEY): &str = ".*?";', "pub const `$1: &str = `"$env:RS_PUB_KEY`";"
+              Write-Host "    Public key configured"
             }
             
-            # Schreibe zurueck
+            # Write back
             Set-Content $file $content -NoNewline -ErrorAction SilentlyContinue
           } else {
-            Write-Host "  Keine relevanten Konstanten gefunden"
+            Write-Host "  No relevant constants found"
           }
         }
-      shell: powershell
 
     - name: Build RustDesk
+      shell: powershell
       run: |
-        Write-Host "Starte RustDesk Build..."
-        Write-Host "Build-Umgebung:"
+        Write-Host "Starting RustDesk build..."
+        Write-Host "Build environment:"
         Write-Host "  Rust: $(rustc --version)"
         Write-Host "  Cargo: $(cargo --version)"
         
-        Write-Host ""
-        Write-Host "Fuehre cargo build --release aus..."
+        Write-Host "Running cargo build --release..."
         
         try {
           cargo build --release --verbose 2>&1 | Tee-Object -FilePath "build.log"
           
-          Write-Host ""
-          Write-Host "BUILD ERFOLGREICH!"
+          Write-Host "BUILD SUCCESSFUL!"
           
-          Write-Host ""
-          Write-Host "Gebaute Binaries:"
+          Write-Host "Built binaries:"
           if (Test-Path "target\release") {
             Get-ChildItem "target\release" -Include "*.exe" | ForEach-Object {
               $size = [math]::Round($_.Length / 1MB, 1)
@@ -303,46 +288,41 @@ EOF
             }
           }
           
-          # Pruefe spezifisch auf rustdesk.exe
+          # Check specifically for rustdesk.exe
           if (Test-Path "target\release\rustdesk.exe") {
-            Write-Host ""
-            Write-Host "RustDesk.exe erfolgreich erstellt!"
-            Get-Item "target\release\rustdesk.exe" | Format-List Name, Length, LastWriteTime
-          } else {
-            Write-Host "rustdesk.exe nicht gefunden, aber andere Binaries vorhanden"
+            Write-Host "RustDesk.exe successfully created!"
+            Get-Item "target\release\rustdesk.exe"
           }
-          
         } catch {
-          Write-Host ""
-          Write-Host "BUILD FEHLGESCHLAGEN: $($_.Exception.Message)"
+          Write-Host "BUILD FAILED: $($_.Exception.Message)"
           if (Test-Path "build.log") {
-            Write-Host "Letzte Fehlermeldungen:"
-            Get-Content "build.log" | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" }
+            Write-Host "Last error messages:"
+            Get-Content "build.log" | Select-Object -Last 20
           }
           exit 1
         }
-      shell: powershell
 
     - name: Create release package
+      shell: powershell
       run: |
-        Write-Host "Erstelle Release-Paket..."
+        Write-Host "Creating release package..."
         
-        # Suche nach rustdesk executable (koennte .exe oder anderer Name sein)
+        # Search for rustdesk executables
         $rustdeskExecutables = Get-ChildItem "target\release" -Include "rustdesk*" -File
         
         if ($rustdeskExecutables.Count -gt 0) {
-          # Erstelle Release-Verzeichnis
+          # Create release directory
           New-Item -ItemType Directory -Path "rustdesk-windows-release" -Force
           
-          # Kopiere alle rustdesk executables
+          # Copy all rustdesk executables
           $rustdeskExecutables | ForEach-Object {
             Copy-Item $_.FullName "rustdesk-windows-release\"
-            Write-Host "Kopiert: $($_.Name)"
+            Write-Host "Copied: $($_.Name)"
           }
           
-          # Erstelle Info-Datei
-          $serverValue = if (![string]::IsNullOrEmpty("${{ secrets.RENDEZVOUS_SERVER }}")) { "${{ secrets.RENDEZVOUS_SERVER }}" } else { "default" }
-          $keyValue = if (![string]::IsNullOrEmpty("${{ secrets.RS_PUB_KEY }}")) { "configured" } else { "default" }
+          # Create info file
+          $serverValue = if ($env:RENDEZVOUS_SERVER) { $env:RENDEZVOUS_SERVER } else { "default" }
+          $keyValue = if ($env:RS_PUB_KEY) { "configured" } else { "default" }
           
           $buildInfo = @"
 RustDesk Custom Build
@@ -362,13 +342,12 @@ Usage:
           
           Set-Content "rustdesk-windows-release\BUILD_INFO.txt" $buildInfo
           
-          Write-Host "Release-Paket erstellt:"
-          Get-ChildItem "rustdesk-windows-release" | Format-Table Name, Length
+          Write-Host "Release package created:"
+          Get-ChildItem "rustdesk-windows-release"
         } else {
-          Write-Host "Keine rustdesk executables gefunden"
+          Write-Host "No rustdesk executables found"
           exit 1
         }
-      shell: powershell
 
     - name: Upload RustDesk Windows Binary
       uses: actions/upload-artifact@v4
