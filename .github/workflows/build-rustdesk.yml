@@ -8,19 +8,13 @@ on:
   workflow_dispatch:
 
 env:
-  SCITER_RUST_VERSION: "1.75"
-  RUST_VERSION: "1.75" 
-  MAC_RUST_VERSION: "1.81"
-  LLVM_VERSION: "15.0.6"
-  FLUTTER_VERSION: "3.24.5"
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-  VCPKG_COMMIT_ID: "485b23ac13e8c0b3004d6bb73fc3ead5e5fc5d22"
+  CARGO_TERM_COLOR: always
 
 jobs:
-  # Einfacher Test-Build nur für Windows erstmal
-  build-windows-simple:
-    name: Windows Simple Build
-    runs-on: windows-2022
+  # Minimaler Windows Build - nur Rust ohne Flutter
+  build-windows-minimal:
+    name: Windows Minimal Build
+    runs-on: windows-latest
     
     steps:
     - name: Checkout source code
@@ -34,30 +28,16 @@ jobs:
         toolchain: "1.75.0"
         components: rustfmt, clippy
 
-    - name: Install LLVM and Clang
-      uses: KyleMayes/install-llvm-action@v1
-      with:
-        version: ${{ env.LLVM_VERSION }}
-
-    - name: Install Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        channel: "stable"
-        flutter-version: ${{ env.FLUTTER_VERSION }}
-
-    - name: Setup vcpkg
+    - name: Debug - Show project structure
       run: |
-        git clone https://github.com/Microsoft/vcpkg.git
-        cd vcpkg
-        git checkout ${{ env.VCPKG_COMMIT_ID }}
-        .\bootstrap-vcpkg.bat
-        echo "VCPKG_ROOT=${{ github.workspace }}\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      shell: powershell
-
-    - name: Install vcpkg dependencies  
-      run: |
-        $env:VCPKG_ROOT = "${{ github.workspace }}\vcpkg"
-        & $env:VCPKG_ROOT\vcpkg.exe install --triplet x64-windows-static --x-install-root="$env:VCPKG_ROOT\installed"
+        Write-Host "🔍 Projektstruktur:"
+        Get-ChildItem -Recurse -Include "Cargo.toml" | Select-Object FullName
+        Write-Host ""
+        Write-Host "🔍 Config-Dateien:"
+        Get-ChildItem -Recurse -Include "config.rs" | Select-Object FullName
+        Write-Host ""
+        Write-Host "🔍 Main src-Dateien:"
+        Get-ChildItem -Path "src" -Include "*.rs" | Select-Object Name
       shell: powershell
 
     - name: Configure custom settings
@@ -65,99 +45,120 @@ jobs:
         RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
         RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
       run: |
-        # Debug: Zeige verfügbare Dateien
-        Write-Host "🔍 Projektstruktur:"
-        Get-ChildItem -Recurse -Include "config.rs" | Select-Object FullName
+        # Prüfe ob Secrets gesetzt sind
+        if ("${{ secrets.RENDEZVOUS_SERVER }}" -eq "") {
+          Write-Host "⚠️ RENDEZVOUS_SERVER Secret nicht gesetzt!"
+        } else {
+          Write-Host "✅ RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}"
+        }
+        
+        if ("${{ secrets.RS_PUB_KEY }}" -eq "") {
+          Write-Host "⚠️ RS_PUB_KEY Secret nicht gesetzt!"
+        } else {
+          Write-Host "✅ RS_PUB_KEY: $(${{ secrets.RS_PUB_KEY }}.Substring(0, [Math]::Min(20, ${{ secrets.RS_PUB_KEY }}.Length)))..."
+        }
         
         # Umgebungsvariablen für Build setzen
         echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         
-        # Konfigurationsdateien modifizieren
-        $configFiles = @(
-          "libs\hbb_common\src\config.rs",
-          "src\config.rs"
-        )
+        # Suche und bearbeite Konfigurationsdateien
+        $configFiles = @()
+        Get-ChildItem -Recurse -Include "config.rs" | ForEach-Object {
+          $configFiles += $_.FullName
+          Write-Host "📁 Gefundene config.rs: $($_.FullName)"
+        }
         
         foreach ($file in $configFiles) {
           if (Test-Path $file) {
-            Write-Host "🔧 Bearbeite $file"
+            Write-Host "🔧 Analysiere $file"
             $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
             
             if ($content) {
+              # Prüfe auf relevante Konstanten
+              if ($content -match 'RENDEZVOUS_SERVERS') {
+                Write-Host "  📡 RENDEZVOUS_SERVERS Pattern gefunden"
+              }
+              if ($content -match 'RS_PUB_KEY|PUBLIC_RS_PUB_KEY') {
+                Write-Host "  🔑 PUB_KEY Pattern gefunden"
+              }
+              
               # Backup erstellen
               Copy-Item $file "$file.backup" -ErrorAction SilentlyContinue
               
-              # Server konfigurieren (nur wenn Pattern gefunden wird)
-              if ($content -match 'RENDEZVOUS_SERVERS') {
+              # Server konfigurieren
+              if ($content -match 'RENDEZVOUS_SERVERS' -and "${{ secrets.RENDEZVOUS_SERVER }}" -ne "") {
                 $content = $content -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];', "pub const RENDEZVOUS_SERVERS: &[&str] = &[`"${{ secrets.RENDEZVOUS_SERVER }}`"];"
-                Write-Host "✅ RENDEZVOUS_SERVER gesetzt in $file"
+                Write-Host "  ✅ RENDEZVOUS_SERVER konfiguriert"
               }
               
-              # Public Key (nur wenn Pattern gefunden wird)
-              if ($content -match 'RS_PUB_KEY|PUBLIC_RS_PUB_KEY') {
+              # Public Key konfigurieren
+              if ($content -match 'RS_PUB_KEY|PUBLIC_RS_PUB_KEY' -and "${{ secrets.RS_PUB_KEY }}" -ne "") {
                 $content = $content -replace 'pub const (RS_PUB_KEY|PUBLIC_RS_PUB_KEY): &str = ".*?";', "pub const `$1: &str = `"${{ secrets.RS_PUB_KEY }}`";"
-                Write-Host "✅ RS_PUB_KEY gesetzt in $file"
+                Write-Host "  ✅ RS_PUB_KEY konfiguriert"
               }
               
               # Schreibe zurück
               Set-Content $file $content -NoNewline -ErrorAction SilentlyContinue
             }
-          } else {
-            Write-Host "⚠️ $file nicht gefunden"
           }
         }
       shell: powershell
 
-    - name: Replace engine with rustdesk custom flutter engine
+    - name: Try simple cargo build
       run: |
-        flutter doctor -v
-        flutter precache --windows
-        Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
-        Expand-Archive windows-x64-release.zip -DestinationPath engine
-        Move-Item "engine/*" "C:\hostedtoolcache\windows\flutter\stable-${{ env.FLUTTER_VERSION }}-x64\bin\cache\artifacts\engine\windows-x64-release\" -Force
-      shell: powershell
-
-    - name: Build rustdesk
-      run: |
-        Write-Host "🚀 Starte RustDesk Build..."
+        Write-Host "🚀 Versuche einfachen Cargo Build..."
         
-        # Verwende das offizielle Build-Script
-        python3 .\build.py --portable --hwcodec --flutter --vram --skip-portable-pack
-        
-        Write-Host "📦 Build abgeschlossen. Prüfe Ausgabe..."
-        if (Test-Path "flutter\build\windows\x64\runner\Release") {
-          Write-Host "✅ Flutter Release Build gefunden!"
-          Move-Item "flutter\build\windows\x64\runner\Release" "rustdesk-release"
-          Get-ChildItem "rustdesk-release" | ForEach-Object { Write-Host "  - $($_.Name)" }
-        } else {
-          Write-Host "❌ Flutter Release Build nicht gefunden"
-          Write-Host "Verfügbare Dateien im flutter/build Verzeichnis:"
-          if (Test-Path "flutter\build") {
-            Get-ChildItem -Recurse "flutter\build" | Where-Object { $_.Name -like "*.exe" } | ForEach-Object { Write-Host "  - $($_.FullName)" }
-          }
+        # Prüfe verfügbare Binaries
+        if (Test-Path "Cargo.toml") {
+          Write-Host "📋 Verfügbare Binaries in Cargo.toml:"
+          Select-String -Path "Cargo.toml" -Pattern "\[\[bin\]\]" -Context 0,3
         }
         
-        # Fallback: Prüfe target/release
+        # Einfacher Build-Versuch
+        try {
+          Write-Host "🦀 Starte: cargo build --release"
+          cargo build --release
+          Write-Host "✅ Cargo build erfolgreich!"
+        } catch {
+          Write-Host "❌ Cargo build fehlgeschlagen: $($_.Exception.Message)"
+        }
+        
+        # Prüfe was gebaut wurde
+        Write-Host "`n📦 Gebaute Dateien:"
         if (Test-Path "target\release") {
-          Write-Host "Dateien in target/release:"
-          Get-ChildItem "target\release" | ForEach-Object { Write-Host "  - $($_.Name)" }
+          Get-ChildItem "target\release" -Include "*.exe" -Recurse | ForEach-Object { 
+            Write-Host "  ✅ $($_.FullName) ($(($_.Length / 1MB).ToString('F1')) MB)"
+          }
+        } else {
+          Write-Host "  ❌ target\release Verzeichnis nicht gefunden"
+        }
+        
+        # Prüfe andere mögliche Ausgabeverzeichnisse
+        @("target\debug", "out", "build") | ForEach-Object {
+          if (Test-Path $_) {
+            Write-Host "`n📁 Inhalt von $_:"
+            Get-ChildItem $_ -Include "*.exe" -Recurse | Select-Object -First 5 | ForEach-Object { 
+              Write-Host "  - $($_.Name)"
+            }
+          }
         }
       shell: powershell
 
-    - name: Upload artifacts
+    - name: Upload any found executables
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: rustdesk-windows-custom
+        name: rustdesk-windows-any-executables
         path: |
-          rustdesk-release/
           target/release/*.exe
+          target/debug/*.exe
+          **/*.exe
         if-no-files-found: warn
 
-  # Linux Build (vereinfacht)
-  build-linux-simple:
-    name: Linux Simple Build
+  # Minimaler Linux Build - nur Rust ohne Flutter  
+  build-linux-minimal:
+    name: Linux Minimal Build
     runs-on: ubuntu-22.04
     
     steps:
@@ -171,113 +172,133 @@ jobs:
       with:
         toolchain: "1.75.0"
 
-    - name: Install dependencies
+    - name: Install basic dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          curl \
-          wget \
-          git \
-          nasm \
-          yasm \
+          build-essential \
+          pkg-config \
+          libssl-dev \
           libgtk-3-dev \
-          libxcb-randr0-dev \
-          libxdo-dev \
-          libxfixes-dev \
-          libxcb-shape0-dev \
-          libxcb-xfixes0-dev \
           libasound2-dev \
-          libpulse-dev \
-          cmake \
-          make \
-          libclang-dev \
-          ninja-build \
-          libgstreamer1.0-dev \
-          libgstreamer-plugins-base1.0-dev \
-          libpam0g-dev \
-          libayatana-appindicator3-dev \
-          zip \
-          g++ \
-          gcc \
-          libc6-dev
+          cmake
 
-    - name: Install Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        channel: "stable"
-        flutter-version: ${{ env.FLUTTER_VERSION }}
+    - name: Debug - Show project structure
+      run: |
+        echo "🔍 Projektstruktur:"
+        find . -name "Cargo.toml" -type f | head -5
+        echo ""
+        echo "🔍 Config-Dateien:"
+        find . -name "config.rs" -type f | head -5
+        echo ""
+        echo "🔍 Main src-Dateien:"
+        ls -la src/ || echo "src/ Verzeichnis nicht gefunden"
 
     - name: Configure custom settings
       env:
         RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
         RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
       run: |
-        # Debug: Zeige verfügbare Dateien  
-        echo "🔍 Projektstruktur:"
-        find . -name "config.rs" -type f | head -5
+        # Prüfe ob Secrets gesetzt sind
+        if [ -z "${{ secrets.RENDEZVOUS_SERVER }}" ]; then
+          echo "⚠️ RENDEZVOUS_SERVER Secret nicht gesetzt!"
+        else
+          echo "✅ RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}"
+        fi
+        
+        if [ -z "${{ secrets.RS_PUB_KEY }}" ]; then
+          echo "⚠️ RS_PUB_KEY Secret nicht gesetzt!"
+        else
+          echo "✅ RS_PUB_KEY: $(echo "${{ secrets.RS_PUB_KEY }}" | cut -c1-20)..."
+        fi
         
         # Umgebungsvariablen für Build setzen
         echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" >> $GITHUB_ENV
         echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" >> $GITHUB_ENV
         
-        # Konfigurationsdateien modifizieren
-        config_files=(
-          "libs/hbb_common/src/config.rs"
-          "src/config.rs"
-        )
-        
-        for file in "${config_files[@]}"; do
+        # Suche und bearbeite Konfigurationsdateien
+        echo "🔍 Suche nach config.rs Dateien..."
+        find . -name "config.rs" -type f | while read file; do
+          echo "📁 Gefundene config.rs: $file"
+          
           if [ -f "$file" ]; then
-            echo "🔧 Bearbeite $file"
+            echo "🔧 Analysiere $file"
+            
+            # Prüfe auf relevante Konstanten
+            if grep -q "RENDEZVOUS_SERVERS" "$file"; then
+              echo "  📡 RENDEZVOUS_SERVERS Pattern gefunden"
+            fi
+            if grep -q "RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
+              echo "  🔑 PUB_KEY Pattern gefunden"
+            fi
             
             # Backup erstellen
             cp "$file" "$file.backup"
             
-            # Server konfigurieren (nur wenn Pattern vorhanden)
-            if grep -q "RENDEZVOUS_SERVERS" "$file"; then
+            # Server konfigurieren
+            if grep -q "RENDEZVOUS_SERVERS" "$file" && [ -n "${{ secrets.RENDEZVOUS_SERVER }}" ]; then
               sed -i 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' "$file"
-              echo "✅ RENDEZVOUS_SERVER gesetzt in $file"
+              echo "  ✅ RENDEZVOUS_SERVER konfiguriert"
             fi
             
-            # Public Key konfigurieren (nur wenn Pattern vorhanden)
-            if grep -q "RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
+            # Public Key konfigurieren
+            if grep -q "RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file" && [ -n "${{ secrets.RS_PUB_KEY }}" ]; then
               sed -i 's/pub const \(RS_PUB_KEY\|PUBLIC_RS_PUB_KEY\): &str = ".*";/pub const \1: \&str = "${{ secrets.RS_PUB_KEY }}";/' "$file"
-              echo "✅ RS_PUB_KEY gesetzt in $file"
+              echo "  ✅ RS_PUB_KEY konfiguriert"
             fi
-          else
-            echo "⚠️ $file nicht gefunden"
           fi
         done
 
-    - name: Build rustdesk
+    - name: Try simple cargo build
       run: |
-        echo "🚀 Starte RustDesk Build..."
+        echo "🚀 Versuche einfachen Cargo Build..."
         
-        # Verwende das offizielle Build-Script
-        if [ -f "build.py" ]; then
-          echo "🐍 Verwende build.py"
-          python3 build.py --flutter
-        else
-          echo "🦀 Verwende direkten Cargo Build"
-          cargo build --release --features inline,vram,hwcodec --bins
+        # Prüfe verfügbare Binaries
+        if [ -f "Cargo.toml" ]; then
+          echo "📋 Verfügbare Binaries in Cargo.toml:"
+          grep -A 3 "\[\[bin\]\]" Cargo.toml || echo "Keine [[bin]] Definitionen gefunden"
         fi
         
-        echo "📦 Build abgeschlossen. Prüfe Ausgabe..."
+        # Einfacher Build-Versuch
+        echo "🦀 Starte: cargo build --release"
+        if cargo build --release; then
+          echo "✅ Cargo build erfolgreich!"
+        else
+          echo "❌ Cargo build fehlgeschlagen"
+          exit_code=$?
+          echo "Exit code: $exit_code"
+        fi
         
-        # Prüfe verschiedene Output-Verzeichnisse
-        for dir in "flutter/build/linux/x64/release/bundle" "target/release"; do
+        # Prüfe was gebaut wurde
+        echo ""
+        echo "📦 Gebaute Dateien:"
+        if [ -d "target/release" ]; then
+          find target/release -name "rustdesk*" -type f | while read file; do
+            size=$(du -h "$file" | cut -f1)
+            echo "  ✅ $file ($size)"
+          done
+        else
+          echo "  ❌ target/release Verzeichnis nicht gefunden"
+        fi
+        
+        # Prüfe andere mögliche Ausgabeverzeichnisse
+        for dir in "target/debug" "out" "build"; do
           if [ -d "$dir" ]; then
-            echo "✅ Gefunden: $dir"
-            find "$dir" -name "rustdesk*" -type f | head -5
+            echo ""
+            echo "📁 Inhalt von $dir:"
+            find "$dir" -name "rustdesk*" -type f | head -5 | while read file; do
+              echo "  - $(basename "$file")"
+            done
           fi
         done
 
-    - name: Upload artifacts
+    - name: Upload any found executables
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: rustdesk-linux-custom
+        name: rustdesk-linux-any-executables
         path: |
-          flutter/build/linux/x64/release/bundle/
-          target/release/rustdesk
+          target/release/rustdesk*
+          target/debug/rustdesk*
+          **/rustdesk
         if-no-files-found: warn
