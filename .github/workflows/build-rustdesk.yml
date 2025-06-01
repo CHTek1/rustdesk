@@ -15,7 +15,7 @@ env:
 jobs:
   build-linux:
     name: Build RustDesk Linux
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     
     steps:
     - name: Checkout source code
@@ -208,7 +208,7 @@ jobs:
           echo "=====================" >> rustdesk-linux-release/BUILD_INFO.txt
           echo "Built on: $(date)" >> rustdesk-linux-release/BUILD_INFO.txt
           echo "Git commit: ${GITHUB_SHA:0:8}" >> rustdesk-linux-release/BUILD_INFO.txt
-          echo "Build environment: Ubuntu 20.04" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Build environment: Ubuntu 22.04" >> rustdesk-linux-release/BUILD_INFO.txt
           echo "Rust version: $(rustc --version)" >> rustdesk-linux-release/BUILD_INFO.txt
           echo "Build features: inline,vram,hwcodec" >> rustdesk-linux-release/BUILD_INFO.txt
           echo "" >> rustdesk-linux-release/BUILD_INFO.txt
@@ -253,7 +253,7 @@ jobs:
           build.log
           build_fallback.log
           **/*.backup
-        if-no-files-found: warn
+        if-no-files-found: ignore
 
   build-windows:
     name: Build RustDesk Windows
@@ -368,44 +368,67 @@ jobs:
           python res\inline-sciter.py
         }
         
+        # Set vcpkg environment
+        $env:VCPKG_ROOT = "C:\vcpkg"
+        
         # Build with inline features for standalone binary
         Write-Host "Building with inline and hardware codec features..."
         
+        $buildSuccess = $false
         try {
-          $env:VCPKG_ROOT = "C:\vcpkg"
           cargo build --features inline,vram,hwcodec --release --bins --verbose 2>&1 | Tee-Object -FilePath "build.log"
+          $buildSuccess = $LASTEXITCODE -eq 0
           
-          Write-Host "BUILD SUCCESSFUL!"
-          
-          Write-Host "Built binaries:"
-          if (Test-Path "target\release") {
-            Get-ChildItem "target\release" -Include "*.exe" | ForEach-Object {
-              $size = [math]::Round($_.Length / 1MB, 1)
-              Write-Host "  $($_.FullName) ($size MB)"
-            }
-          }
-          
-          # Check specifically for rustdesk.exe
-          if (Test-Path "target\release\rustdesk.exe") {
-            Write-Host "RustDesk.exe successfully created!"
-            Get-Item "target\release\rustdesk.exe"
+          if ($buildSuccess) {
+            Write-Host "BUILD SUCCESSFUL!"
+          } else {
+            Write-Host "Primary build failed with exit code: $LASTEXITCODE"
           }
         } catch {
-          Write-Host "BUILD FAILED: $($_.Exception.Message)"
-          if (Test-Path "build.log") {
-            Write-Host "Last error messages:"
-            Get-Content "build.log" | Select-Object -Last 30
-          }
-          
+          Write-Host "Primary build exception: $($_.Exception.Message)"
+        }
+        
+        if (-not $buildSuccess) {
           Write-Host "Trying fallback build without features..."
           try {
             cargo build --release --verbose 2>&1 | Tee-Object -FilePath "build_fallback.log"
-            Write-Host "Fallback build successful!"
+            $buildSuccess = $LASTEXITCODE -eq 0
+            
+            if ($buildSuccess) {
+              Write-Host "Fallback build successful!"
+            } else {
+              Write-Host "Fallback build also failed with exit code: $LASTEXITCODE"
+            }
           } catch {
-            Write-Host "Fallback build also failed:"
-            Get-Content "build_fallback.log" | Select-Object -Last 20
-            exit 1
+            Write-Host "Fallback build exception: $($_.Exception.Message)"
           }
+        }
+        
+        if (-not $buildSuccess) {
+          Write-Host "All builds failed. Showing available logs:"
+          if (Test-Path "build.log") {
+            Write-Host "Primary build errors:"
+            Get-Content "build.log" | Select-Object -Last 30
+          }
+          if (Test-Path "build_fallback.log") {
+            Write-Host "Fallback build errors:"
+            Get-Content "build_fallback.log" | Select-Object -Last 20
+          }
+          exit 1
+        }
+        
+        Write-Host "Built binaries:"
+        if (Test-Path "target\release") {
+          Get-ChildItem "target\release" -Include "*.exe" | ForEach-Object {
+            $size = [math]::Round($_.Length / 1MB, 1)
+            Write-Host "  $($_.FullName) ($size MB)"
+          }
+        }
+        
+        # Check specifically for rustdesk.exe
+        if (Test-Path "target\release\rustdesk.exe") {
+          Write-Host "RustDesk.exe successfully created!"
+          Get-Item "target\release\rustdesk.exe"
         }
 
     - name: Create release package
@@ -477,4 +500,4 @@ jobs:
           build.log
           build_fallback.log
           **/*.backup
-        if-no-files-found: warn
+        if-no-files-found: ignore
