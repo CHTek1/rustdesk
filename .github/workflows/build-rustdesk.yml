@@ -92,45 +92,69 @@ jobs:
 
     - name: Build RustDesk
       run: |
-        # Flutter Build (da RustDesk hauptsächlich Flutter verwendet)
-        python3 -c "
-import subprocess
-import sys
-import os
-
-# Prüfe ob Flutter verfügbar ist, sonst normaler Rust build
-try:
-    # Teste ob Flutter build verfügbar ist
-    if os.path.exists('flutter'):
-        print('🔥 Building with Flutter...')
-        result = subprocess.run(['python3', 'build.py', '--flutter'], capture_output=True, text=True, timeout=1800)
-        if result.returncode != 0:
-            print('Flutter build failed, falling back to cargo build')
-            subprocess.run(['cargo', 'build', '--release'], check=True)
-    else:
-        print('🦀 Building with Cargo...')
-        subprocess.run(['cargo', 'build', '--release'], check=True)
-except Exception as e:
-    print(f'Build script failed: {e}')
-    print('🦀 Fallback: Using cargo build --release')
-    subprocess.run(['cargo', 'build', '--release'], check=True)
-"
+        # Intelligenter Build-Process für Windows
+        echo "🔍 Prüfe verfügbare Build-Optionen..."
+        
+        if (Test-Path "build.py") {
+          Write-Host "🐍 Python Build-Script gefunden"
+          if (Test-Path "flutter") {
+            Write-Host "🔥 Flutter Build wird gestartet..."
+            try {
+              python build.py --flutter
+            } catch {
+              Write-Host "Flutter build fehlgeschlagen, versuche Standard build..."
+              try {
+                python build.py
+              } catch {
+                Write-Host "Python build fehlgeschlagen, verwende Cargo..."
+                cargo build --release
+              }
+            }
+          } else {
+            Write-Host "🦀 Standard Build wird gestartet..."
+            try {
+              python build.py
+            } catch {
+              Write-Host "Python build fehlgeschlagen, verwende Cargo..."
+              cargo build --release
+            }
+          }
+        } else {
+          Write-Host "🦀 Cargo Build wird gestartet..."
+          cargo build --release
+        }
         
     - name: Build installer (Windows)
       run: |
-        # Installer bauen falls verfügbar
-        if (Test-Path "build.py") {
-          python build.py --portable
+        # Suche nach fertigen Binaries und erstelle Artefakte
+        echo "📦 Erstelle Windows Installer..."
+        if (Test-Path "target/release/rustdesk.exe") {
+          Write-Host "✅ RustDesk Binary gefunden!"
+          # Optional: Installer erstellen falls Script vorhanden
+          if (Test-Path "res/msi/build.bat") {
+            try {
+              cd res/msi
+              .\build.bat
+              cd ../..
+            } catch {
+              Write-Host "⚠️ MSI Build fehlgeschlagen, aber Binary ist verfügbar"
+            }
+          }
+        } else {
+          Write-Host "❌ RustDesk Binary nicht gefunden in target/release/"
+          Get-ChildItem -Path "target" -Recurse -Name "rustdesk*" | Write-Host
         }
       shell: powershell
       
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
+      if: always()
       with:
         name: rustdesk-windows-custom
         path: |
           target/release/rustdesk.exe
           target/release/*.exe
+          target/release/*.msi
 
   build-linux:
     runs-on: ubuntu-latest
@@ -219,10 +243,12 @@ except Exception as e:
         
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
+      if: always()
       with:
         name: rustdesk-linux-custom
         path: |
           target/release/rustdesk
+          target/release/rustdesk-*
 
   build-macos:
     runs-on: macos-latest
@@ -288,7 +314,10 @@ except Exception as e:
         
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
+      if: always()
       with:
         name: rustdesk-macos-custom
         path: |
           target/release/rustdesk
+          target/release/rustdesk-*
+          target/release/*.app
