@@ -10,11 +10,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  RUST_VERSION: "1.75.0"
 
 jobs:
   build-linux:
     name: Build RustDesk Linux
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-20.04
     
     steps:
     - name: Checkout source code
@@ -25,30 +26,68 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: "1.75.0"
+        toolchain: ${{ env.RUST_VERSION }}
 
     - name: Install system dependencies
       run: |
-        echo "Installing system dependencies..."
+        echo "Installing RustDesk dependencies..."
         sudo apt-get update
         sudo apt-get install -y \
-          pkg-config \
-          libssl-dev \
+          curl \
+          wget \
+          git \
+          nasm \
+          yasm \
           libgtk-3-dev \
-          libasound2-dev \
           libxcb-randr0-dev \
           libxdo-dev \
           libxfixes-dev \
           libxcb-shape0-dev \
           libxcb-xfixes0-dev \
-          libudev-dev \
+          libasound2-dev \
+          libpulse-dev \
           cmake \
-          build-essential \
-          libpam0g-dev \
+          make \
+          libclang-dev \
+          ninja-build \
           libgstreamer1.0-dev \
           libgstreamer-plugins-base1.0-dev \
+          libpam0g-dev \
+          zip \
+          g++ \
+          gcc \
+          libc6-dev \
+          pkg-config \
+          libssl-dev \
           libayatana-appindicator3-dev \
-          librsvg2-dev
+          librsvg2-dev \
+          libudev-dev
+
+    - name: Install vcpkg and dependencies
+      run: |
+        echo "Setting up vcpkg..."
+        git clone https://github.com/Microsoft/vcpkg.git
+        cd vcpkg
+        git checkout 2023.04.15
+        ./bootstrap-vcpkg.sh
+        export VCPKG_ROOT=$PWD
+        echo "VCPKG_ROOT=$PWD" >> $GITHUB_ENV
+        
+        echo "Installing vcpkg packages..."
+        ./vcpkg install libvpx libyuv opus aom
+        
+        # Fix for libvpx if needed
+        cd buildtrees/libvpx/src
+        if [ -d "*" ]; then
+          cd *
+          if [ -f "Makefile" ] && [ -f "configure" ]; then
+            ./configure || true
+            sed -i 's/CFLAGS+=-I/CFLAGS+=-fPIC -I/g' Makefile || true
+            sed -i 's/CXXFLAGS+=-I/CXXFLAGS+=-fPIC -I/g' Makefile || true
+            make || true
+            cp libvpx.a $VCPKG_ROOT/installed/x64-linux/lib/ || true
+          fi
+        fi
 
     - name: Configure custom RustDesk settings
       env:
@@ -61,13 +100,13 @@ jobs:
         if [ -z "$RENDEZVOUS_SERVER" ]; then
           echo "WARNING: RENDEZVOUS_SERVER secret not set - using default"
         else
-          echo "SUCCESS: RENDEZVOUS_SERVER configured"
+          echo "SUCCESS: RENDEZVOUS_SERVER configured: $RENDEZVOUS_SERVER"
         fi
         
         if [ -z "$RS_PUB_KEY" ]; then
           echo "WARNING: RS_PUB_KEY secret not set - using default"
         else
-          echo "SUCCESS: RS_PUB_KEY configured"
+          echo "SUCCESS: RS_PUB_KEY configured: ${RS_PUB_KEY:0:20}..."
         fi
         
         # Set build environment variables
@@ -88,7 +127,7 @@ jobs:
             # Configure server (only if secret is set and pattern exists)
             if [ -n "$RENDEZVOUS_SERVER" ] && grep -q "RENDEZVOUS_SERVERS" "$file"; then
               sed -i "s|pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];|pub const RENDEZVOUS_SERVERS: \&[\&str] = \&[\"$RENDEZVOUS_SERVER\"];|" "$file"
-              echo "    Server configured"
+              echo "    Server configured to: $RENDEZVOUS_SERVER"
             fi
             
             # Configure public key (only if secret is set and pattern exists)
@@ -96,20 +135,32 @@ jobs:
               sed -i "s|pub const \(RS_PUB_KEY\|PUBLIC_RS_PUB_KEY\): &str = \".*\";|pub const \1: \&str = \"$RS_PUB_KEY\";|" "$file"
               echo "    Public key configured"
             fi
+            
+            # Show changes
+            echo "    Modified lines:"
+            grep -n "RENDEZVOUS_SERVERS\|RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file" | head -3 | sed 's/^/      /'
           else
             echo "  No relevant constants found"
           fi
         done
 
-    - name: Build RustDesk
+    - name: Build RustDesk with inline features
       run: |
-        echo "Starting RustDesk build..."
+        echo "Starting RustDesk build with inline features..."
         echo "Build environment:"
         echo "  Rust: $(rustc --version)"
         echo "  Cargo: $(cargo --version)"
+        echo "  VCPKG_ROOT: $VCPKG_ROOT"
         
-        echo "Running cargo build --release..."
-        if cargo build --release --verbose 2>&1 | tee build.log; then
+        # Use inline build like in original RustDesk workflow
+        echo "Running inline sciter patch..."
+        if [ -f "res/inline-sciter.py" ]; then
+          python3 res/inline-sciter.py
+        fi
+        
+        # Build with inline features for standalone binary
+        echo "Building with inline and hardware codec features..."
+        if VCPKG_ROOT=$VCPKG_ROOT cargo build --features inline,vram,hwcodec --release --bins --verbose 2>&1 | tee build.log; then
           echo "BUILD SUCCESSFUL!"
           
           echo "Built binaries:"
@@ -126,12 +177,21 @@ jobs:
           if [ -f "target/release/rustdesk" ]; then
             echo "RustDesk binary successfully created!"
             ls -la target/release/rustdesk
+            file target/release/rustdesk
           fi
         else
           echo "BUILD FAILED"
           echo "Last error messages:"
-          tail -20 build.log
-          exit 1
+          tail -30 build.log
+          
+          echo "Trying fallback build without features..."
+          if cargo build --release --verbose 2>&1 | tee build_fallback.log; then
+            echo "Fallback build successful!"
+          else
+            echo "Fallback build also failed:"
+            tail -20 build_fallback.log
+            exit 1
+          fi
         fi
 
     - name: Create release package
@@ -148,14 +208,15 @@ jobs:
           echo "=====================" >> rustdesk-linux-release/BUILD_INFO.txt
           echo "Built on: $(date)" >> rustdesk-linux-release/BUILD_INFO.txt
           echo "Git commit: ${GITHUB_SHA:0:8}" >> rustdesk-linux-release/BUILD_INFO.txt
-          echo "Build environment: Ubuntu 22.04" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Build environment: Ubuntu 20.04" >> rustdesk-linux-release/BUILD_INFO.txt
           echo "Rust version: $(rustc --version)" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Build features: inline,vram,hwcodec" >> rustdesk-linux-release/BUILD_INFO.txt
           echo "" >> rustdesk-linux-release/BUILD_INFO.txt
           echo "Custom Configuration:" >> rustdesk-linux-release/BUILD_INFO.txt
           if [ -n "$RENDEZVOUS_SERVER" ]; then
             echo "- RENDEZVOUS_SERVER: $RENDEZVOUS_SERVER" >> rustdesk-linux-release/BUILD_INFO.txt
           else
-            echo "- RENDEZVOUS_SERVER: default" >> rustdesk-linux-release/BUILD_INFO.txt
+            echo "- RENDEZVOUS_SERVER: default (rs-ny.rustdesk.com)" >> rustdesk-linux-release/BUILD_INFO.txt
           fi
           if [ -n "$RS_PUB_KEY" ]; then
             echo "- RS_PUB_KEY: configured" >> rustdesk-linux-release/BUILD_INFO.txt
@@ -171,6 +232,8 @@ jobs:
           ls -la rustdesk-linux-release/
         else
           echo "No rustdesk binary found"
+          echo "Available files in target/release:"
+          ls -la target/release/ || echo "target/release directory not found"
           exit 1
         fi
 
@@ -188,12 +251,13 @@ jobs:
         name: linux-build-logs
         path: |
           build.log
+          build_fallback.log
           **/*.backup
         if-no-files-found: warn
 
   build-windows:
     name: Build RustDesk Windows
-    runs-on: windows-latest
+    runs-on: windows-2022
     
     steps:
     - name: Checkout source code
@@ -204,7 +268,26 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: "1.75.0"
+        toolchain: ${{ env.RUST_VERSION }}
+
+    - name: Install LLVM
+      uses: KyleMayes/install-llvm-action@v1
+      with:
+        version: "15.0.6"
+
+    - name: Install vcpkg and dependencies
+      shell: powershell
+      run: |
+        Write-Host "Setting up vcpkg for Windows..."
+        git clone https://github.com/Microsoft/vcpkg.git C:\vcpkg
+        cd C:\vcpkg
+        git checkout 2023.04.15
+        .\bootstrap-vcpkg.bat
+        
+        Write-Host "Installing vcpkg packages..."
+        .\vcpkg.exe install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
+        
+        echo "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
     - name: Configure custom RustDesk settings
       env:
@@ -221,13 +304,13 @@ jobs:
         if (!$serverSet) {
           Write-Host "WARNING: RENDEZVOUS_SERVER secret not set - using default"
         } else {
-          Write-Host "SUCCESS: RENDEZVOUS_SERVER configured"
+          Write-Host "SUCCESS: RENDEZVOUS_SERVER configured: $env:RENDEZVOUS_SERVER"
         }
         
         if (!$keySet) {
           Write-Host "WARNING: RS_PUB_KEY secret not set - using default"
         } else {
-          Write-Host "SUCCESS: RS_PUB_KEY configured"
+          Write-Host "SUCCESS: RS_PUB_KEY configured: $($env:RS_PUB_KEY.Substring(0, [Math]::Min(20, $env:RS_PUB_KEY.Length)))..."
         }
         
         # Set build environment variables
@@ -250,7 +333,7 @@ jobs:
             # Configure server
             if ($serverSet -and $content -match 'RENDEZVOUS_SERVERS') {
               $content = $content -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];', "pub const RENDEZVOUS_SERVERS: &[&str] = &[`"$env:RENDEZVOUS_SERVER`"];"
-              Write-Host "    Server configured"
+              Write-Host "    Server configured to: $env:RENDEZVOUS_SERVER"
             }
             
             # Configure public key
@@ -261,23 +344,36 @@ jobs:
             
             # Write back
             Set-Content $file $content -NoNewline -ErrorAction SilentlyContinue
+            
+            # Show changes
+            Write-Host "    Modified lines:"
+            Select-String -Path $file -Pattern "RENDEZVOUS_SERVERS|RS_PUB_KEY|PUBLIC_RS_PUB_KEY" | Select-Object -First 3 | ForEach-Object { Write-Host "      $($_.Line)" }
           } else {
             Write-Host "  No relevant constants found"
           }
         }
 
-    - name: Build RustDesk
+    - name: Build RustDesk with inline features
       shell: powershell
       run: |
-        Write-Host "Starting RustDesk build..."
+        Write-Host "Starting RustDesk build with inline features..."
         Write-Host "Build environment:"
         Write-Host "  Rust: $(rustc --version)"
         Write-Host "  Cargo: $(cargo --version)"
+        Write-Host "  VCPKG_ROOT: $env:VCPKG_ROOT"
         
-        Write-Host "Running cargo build --release..."
+        # Use inline build like in original RustDesk workflow
+        Write-Host "Running inline sciter patch..."
+        if (Test-Path "res\inline-sciter.py") {
+          python res\inline-sciter.py
+        }
+        
+        # Build with inline features for standalone binary
+        Write-Host "Building with inline and hardware codec features..."
         
         try {
-          cargo build --release --verbose 2>&1 | Tee-Object -FilePath "build.log"
+          $env:VCPKG_ROOT = "C:\vcpkg"
+          cargo build --features inline,vram,hwcodec --release --bins --verbose 2>&1 | Tee-Object -FilePath "build.log"
           
           Write-Host "BUILD SUCCESSFUL!"
           
@@ -298,9 +394,18 @@ jobs:
           Write-Host "BUILD FAILED: $($_.Exception.Message)"
           if (Test-Path "build.log") {
             Write-Host "Last error messages:"
-            Get-Content "build.log" | Select-Object -Last 20
+            Get-Content "build.log" | Select-Object -Last 30
           }
-          exit 1
+          
+          Write-Host "Trying fallback build without features..."
+          try {
+            cargo build --release --verbose 2>&1 | Tee-Object -FilePath "build_fallback.log"
+            Write-Host "Fallback build successful!"
+          } catch {
+            Write-Host "Fallback build also failed:"
+            Get-Content "build_fallback.log" | Select-Object -Last 20
+            exit 1
+          }
         }
 
     - name: Create release package
@@ -308,6 +413,7 @@ jobs:
       run: |
         Write-Host "Creating release package..."
         
+        # Search for rustdesk executables
         $rustdeskExecutables = Get-ChildItem "target\release" -Include "rustdesk*" -File
         
         if ($rustdeskExecutables.Count -gt 0) {
@@ -324,15 +430,16 @@ jobs:
           "=====================" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           "Built on: $(Get-Date)" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           "Git commit: $($env:GITHUB_SHA.Substring(0,8))" | Out-File -FilePath $infoFile -Append -Encoding UTF8
-          "Build environment: Windows Latest" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Build environment: Windows 2022" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           "Rust version: $(rustc --version)" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Build features: inline,vram,hwcodec" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           "" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           "Custom Configuration:" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           
           if ($env:RENDEZVOUS_SERVER) {
             "- RENDEZVOUS_SERVER: $env:RENDEZVOUS_SERVER" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           } else {
-            "- RENDEZVOUS_SERVER: default" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+            "- RENDEZVOUS_SERVER: default (rs-ny.rustdesk.com)" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           }
           
           if ($env:RS_PUB_KEY) {
@@ -349,6 +456,8 @@ jobs:
           Get-ChildItem "rustdesk-windows-release"
         } else {
           Write-Host "No rustdesk executables found"
+          Write-Host "Available files in target\release:"
+          Get-ChildItem "target\release" -ErrorAction SilentlyContinue
           exit 1
         }
 
@@ -366,5 +475,6 @@ jobs:
         name: windows-build-logs
         path: |
           build.log
+          build_fallback.log
           **/*.backup
         if-no-files-found: warn
