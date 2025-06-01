@@ -395,29 +395,38 @@ jobs:
             Copy-Item $_.FullName "rustdesk-windows-release\"
           }
           
-          # Create info file
-          $binList = ($rustdeskBins | ForEach-Object { "- $($_.Name)" }) -join "`n"
+          # Create info file line by line
+          $infoFile = "rustdesk-windows-release\BUILD_INFO.txt"
           
-          $buildInfo = @"
-RustDesk Custom Build
-====================
-Built on: $(Get-Date)
-Commit: $($env:GITHUB_SHA.Substring(0,8))
-Platform: Windows Latest
-Rust: $(rustc --version)
-
-Custom Configuration:
-- RENDEZVOUS_SERVER: $(if ($env:RENDEZVOUS_SERVER) { $env:RENDEZVOUS_SERVER } else { "default" })
-- RS_PUB_KEY: $(if ($env:RS_PUB_KEY) { "configured" } else { "default" })
-
-Binaries included:
-$binList
-
-Usage:
-  Double-click rustdesk.exe to run
-"@
+          "RustDesk Custom Build" | Out-File -FilePath $infoFile -Encoding UTF8
+          "====================" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Built on: $(Get-Date)" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Commit: $($env:GITHUB_SHA.Substring(0,8))" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Platform: Windows Latest" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Rust: $(rustc --version)" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Custom Configuration:" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           
-          Set-Content "rustdesk-windows-release\BUILD_INFO.txt" $buildInfo
+          if ($env:RENDEZVOUS_SERVER) {
+            "- RENDEZVOUS_SERVER: $env:RENDEZVOUS_SERVER" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          } else {
+            "- RENDEZVOUS_SERVER: default" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          }
+          
+          if ($env:RS_PUB_KEY) {
+            "- RS_PUB_KEY: configured" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          } else {
+            "- RS_PUB_KEY: default" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          }
+          
+          "" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Binaries included:" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          $rustdeskBins | ForEach-Object {
+            "- $($_.Name)" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          }
+          "" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "Usage:" | Out-File -FilePath $infoFile -Append -Encoding UTF8
+          "  Double-click rustdesk.exe to run" | Out-File -FilePath $infoFile -Append -Encoding UTF8
           
           Write-Host "Release package created:"
           Get-ChildItem "rustdesk-windows-release"
