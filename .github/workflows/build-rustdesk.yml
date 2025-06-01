@@ -29,6 +29,13 @@ jobs:
       run: |
         # Windows-spezifische Dependencies
         choco install llvm
+        # vcpkg für zusätzliche Libraries
+        git clone https://github.com/Microsoft/vcpkg.git
+        cd vcpkg
+        .\bootstrap-vcpkg.bat
+        .\vcpkg install libvpx:x64-windows libyuv:x64-windows opus:x64-windows
+        echo "VCPKG_ROOT=$PWD" >> $GITHUB_ENV
+        cd ..
         
     - name: Cache cargo registry
       uses: actions/cache@v4
@@ -54,13 +61,20 @@ jobs:
         echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" >> $GITHUB_ENV
         echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" >> $GITHUB_ENV
         
+        # Debug: Zeige verfügbare Dateien
+        echo "📁 Verfügbare Rust-Dateien:"
+        find . -name "*.rs" -path "*/config*" -o -name "config.rs" | head -10
+        
         # Zusätzlich: Modifiziere Konfigurationsdateien direkt
         # RustDesk sucht nach diesen Dateien für hardcoded Werte
-        $configFiles = @("libs/hbb_common/src/config.rs", "src/config.rs")
+        $configFiles = @("libs/hbb_common/src/config.rs", "src/config.rs", "src/common.rs")
         
         foreach ($configFile in $configFiles) {
           if (Test-Path $configFile) {
-            Write-Host "Bearbeite $configFile..."
+            Write-Host "🔧 Bearbeite $configFile..."
+            
+            # Backup erstellen
+            Copy-Item $configFile "$configFile.backup"
             
             # Rendezvous Server konfigurieren
             (Get-Content $configFile) -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];', "pub const RENDEZVOUS_SERVERS: &[&str] = &[`"${{ secrets.RENDEZVOUS_SERVER }}`"];" | Set-Content $configFile
@@ -70,13 +84,37 @@ jobs:
             (Get-Content $configFile) -replace 'pub const RS_PUB_KEY: &str = ".*?";', "pub const RS_PUB_KEY: &str = `"${{ secrets.RS_PUB_KEY }}`";" | Set-Content $configFile
             
             Write-Host "✅ $configFile konfiguriert"
+          } else {
+            Write-Host "⚠️  $configFile nicht gefunden"
           }
         }
       shell: powershell
 
     - name: Build RustDesk
       run: |
-        cargo build --release
+        # Flutter Build (da RustDesk hauptsächlich Flutter verwendet)
+        python3 -c "
+import subprocess
+import sys
+import os
+
+# Prüfe ob Flutter verfügbar ist, sonst normaler Rust build
+try:
+    # Teste ob Flutter build verfügbar ist
+    if os.path.exists('flutter'):
+        print('🔥 Building with Flutter...')
+        result = subprocess.run(['python3', 'build.py', '--flutter'], capture_output=True, text=True, timeout=1800)
+        if result.returncode != 0:
+            print('Flutter build failed, falling back to cargo build')
+            subprocess.run(['cargo', 'build', '--release'], check=True)
+    else:
+        print('🦀 Building with Cargo...')
+        subprocess.run(['cargo', 'build', '--release'], check=True)
+except Exception as e:
+    print(f'Build script failed: {e}')
+    print('🦀 Fallback: Using cargo build --release')
+    subprocess.run(['cargo', 'build', '--release'], check=True)
+"
         
     - name: Build installer (Windows)
       run: |
@@ -108,6 +146,14 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y \
+          build-essential \
+          curl \
+          wget \
+          file \
+          libssl-dev \
+          libgtk-3-dev \
+          libayatana-appindicator3-dev \
+          librsvg2-dev \
           libasound2-dev \
           libxcb-randr0-dev \
           libxdo-dev \
@@ -115,24 +161,37 @@ jobs:
           libxcb-shape0-dev \
           libxcb-xfixes0-dev \
           libudev-dev \
-          libgtk-3-dev \
-          libayatana-appindicator3-dev
+          libpam0g-dev \
+          cmake \
+          git
           
     - name: Configure custom settings
       run: |
+        # Debug: Zeige Projektstruktur
+        echo "📁 Projektstruktur:"
+        find . -maxdepth 3 -name "*.rs" -path "*/config*" -o -name "config.rs" | head -10
+        
         # Konfiguration für Linux
         if [ -f "libs/hbb_common/src/config.rs" ]; then
+          echo "🔧 Bearbeite libs/hbb_common/src/config.rs..."
+          cp libs/hbb_common/src/config.rs libs/hbb_common/src/config.rs.backup
           sed -i 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' libs/hbb_common/src/config.rs
           sed -i 's/pub const PUBLIC_RS_PUB_KEY: &str = ".*";/pub const PUBLIC_RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' libs/hbb_common/src/config.rs
           sed -i 's/pub const RS_PUB_KEY: &str = ".*";/pub const RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' libs/hbb_common/src/config.rs
           echo "✅ libs/hbb_common/src/config.rs konfiguriert"
+        else
+          echo "⚠️  libs/hbb_common/src/config.rs nicht gefunden"
         fi
         
         if [ -f "src/config.rs" ]; then
+          echo "🔧 Bearbeite src/config.rs..."
+          cp src/config.rs src/config.rs.backup
           sed -i 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' src/config.rs
           sed -i 's/pub const PUBLIC_RS_PUB_KEY: &str = ".*";/pub const PUBLIC_RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' src/config.rs
           sed -i 's/pub const RS_PUB_KEY: &str = ".*";/pub const RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' src/config.rs
           echo "✅ src/config.rs konfiguriert"
+        else
+          echo "⚠️  src/config.rs nicht gefunden"
         fi
         
         # Umgebungsvariablen setzen (wichtig für Build-Process)
@@ -141,7 +200,22 @@ jobs:
         
     - name: Build RustDesk
       run: |
-        cargo build --release
+        # Intelligenter Build-Process
+        echo "🔍 Prüfe verfügbare Build-Optionen..."
+        
+        if [ -f "build.py" ]; then
+          echo "🐍 Python Build-Script gefunden"
+          if [ -d "flutter" ]; then
+            echo "🔥 Flutter Build wird gestartet..."
+            python3 build.py --flutter || python3 build.py || cargo build --release
+          else
+            echo "🦀 Standard Build wird gestartet..."
+            python3 build.py || cargo build --release
+          fi
+        else
+          echo "🦀 Cargo Build wird gestartet..."
+          cargo build --release
+        fi
         
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
@@ -162,19 +236,31 @@ jobs:
         
     - name: Configure custom settings
       run: |
+        # Debug: Zeige Projektstruktur
+        echo "📁 Projektstruktur:"
+        find . -maxdepth 3 -name "*.rs" -path "*/config*" -o -name "config.rs" | head -10
+        
         # Konfiguration für macOS
         if [ -f "libs/hbb_common/src/config.rs" ]; then
+          echo "🔧 Bearbeite libs/hbb_common/src/config.rs..."
+          cp libs/hbb_common/src/config.rs libs/hbb_common/src/config.rs.backup
           sed -i '' 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' libs/hbb_common/src/config.rs
           sed -i '' 's/pub const PUBLIC_RS_PUB_KEY: &str = ".*";/pub const PUBLIC_RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' libs/hbb_common/src/config.rs
           sed -i '' 's/pub const RS_PUB_KEY: &str = ".*";/pub const RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' libs/hbb_common/src/config.rs
           echo "✅ libs/hbb_common/src/config.rs konfiguriert"
+        else
+          echo "⚠️  libs/hbb_common/src/config.rs nicht gefunden"
         fi
         
         if [ -f "src/config.rs" ]; then
+          echo "🔧 Bearbeite src/config.rs..."
+          cp src/config.rs src/config.rs.backup
           sed -i '' 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' src/config.rs
           sed -i '' 's/pub const PUBLIC_RS_PUB_KEY: &str = ".*";/pub const PUBLIC_RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' src/config.rs
           sed -i '' 's/pub const RS_PUB_KEY: &str = ".*";/pub const RS_PUB_KEY: \&str = "${{ secrets.RS_PUB_KEY }}";/' src/config.rs
           echo "✅ src/config.rs konfiguriert"
+        else
+          echo "⚠️  src/config.rs nicht gefunden"
         fi
         
         # Umgebungsvariablen setzen (wichtig für Build-Process)
@@ -183,7 +269,22 @@ jobs:
         
     - name: Build RustDesk
       run: |
-        cargo build --release
+        # Intelligenter Build-Process für macOS
+        echo "🔍 Prüfe verfügbare Build-Optionen..."
+        
+        if [ -f "build.py" ]; then
+          echo "🐍 Python Build-Script gefunden"
+          if [ -d "flutter" ]; then
+            echo "🔥 Flutter Build wird gestartet..."
+            python3 build.py --flutter || python3 build.py || cargo build --release
+          else
+            echo "🦀 Standard Build wird gestartet..."
+            python3 build.py || cargo build --release
+          fi
+        else
+          echo "🦀 Cargo Build wird gestartet..."
+          cargo build --release
+        fi
         
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
