@@ -6,6 +6,14 @@ on:
     - cron: "0 0 * * *"
   workflow_dispatch:
 
+env:
+  RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+  RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+  # Zusätzlich für neuere Versionen:
+  RENDEZVOUS_SERVER1: ${{ secrets.RENDEZVOUS_SERVER }}
+  RENDEZVOUS_SERVER2: ""
+  RENDEZVOUS_SERVER3: ""
+
 jobs:
   run-flutter-nightly-build:
     uses: ./.github/workflows/flutter-build.yml
