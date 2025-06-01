@@ -46,7 +46,19 @@ jobs:
           cmake \
           libpam0g-dev \
           libayatana-appindicator3-dev \
-          librsvg2-dev
+          librsvg2-dev \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libgstreamer-plugins-bad1.0-dev \
+          libunwind-dev \
+          libvpx-dev \
+          libyuv-dev \
+          libopus-dev \
+          uuid-dev \
+          clang \
+          libclang-dev \
+          nasm \
+          yasm
 
     - name: Configure custom RustDesk settings
       env:
