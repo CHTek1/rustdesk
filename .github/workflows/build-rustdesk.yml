@@ -232,9 +232,10 @@ EOF
         }
         
         if ("${{ secrets.RS_PUB_KEY }}" -eq "") {
-          Write-Host "⚠️ RS_PUB_KEY Secret nicht gesetzt - verwende Standard"
+          Write-Host "⚠️ RS_PUB_KEY Secret nicht gesetzt - verwende Standard"  
         } else {
-          Write-Host "✅ RS_PUB_KEY: $(${{ secrets.RS_PUB_KEY }}.Substring(0, [Math]::Min(20, ${{ secrets.RS_PUB_KEY }}.Length)))..."
+          $keyPreview = "${{ secrets.RS_PUB_KEY }}".Substring(0, [Math]::Min(20, "${{ secrets.RS_PUB_KEY }}".Length))
+          Write-Host "✅ RS_PUB_KEY: $keyPreview..."
         }
         
         # Setze Build-Umgebungsvariablen
@@ -338,6 +339,9 @@ EOF
           }
           
           # Erstelle Info-Datei
+          $serverValue = if ("${{ secrets.RENDEZVOUS_SERVER }}" -ne "") { "${{ secrets.RENDEZVOUS_SERVER }}" } else { "default" }
+          $keyValue = if ("${{ secrets.RS_PUB_KEY }}" -ne "") { "configured" } else { "default" }
+          
           $buildInfo = @"
 RustDesk Custom Build
 ====================
@@ -347,8 +351,8 @@ Build environment: Windows Latest
 Rust version: $(rustc --version)
 
 Custom Configuration:
-- RENDEZVOUS_SERVER: $("${{ secrets.RENDEZVOUS_SERVER }}" -ne "" ? "${{ secrets.RENDEZVOUS_SERVER }}" : "default")
-- RS_PUB_KEY: $("${{ secrets.RS_PUB_KEY }}" -ne "" ? "configured" : "default")
+- RENDEZVOUS_SERVER: $serverValue
+- RS_PUB_KEY: $keyValue
 
 Usage:
   Double-click rustdesk.exe to run
