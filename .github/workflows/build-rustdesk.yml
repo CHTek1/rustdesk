@@ -1,4 +1,4 @@
-name: Debug RustDesk Build Issues
+name: Build Custom RustDesk Client
 
 on:
   push:
@@ -12,9 +12,8 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  # Vollständige Diagnose was schiefgeht
-  diagnose-build-issues:
-    name: Diagnose Build Issues
+  build-linux:
+    name: Build RustDesk Linux
     runs-on: ubuntu-22.04
     
     steps:
@@ -28,134 +27,9 @@ jobs:
       with:
         toolchain: "1.75.0"
 
-    - name: Complete project analysis
+    - name: Install system dependencies
       run: |
-        echo "🔍 VOLLSTÄNDIGE PROJEKTANALYSE"
-        echo "=============================="
-        
-        echo ""
-        echo "📁 Repository Root:"
-        ls -la
-        
-        echo ""
-        echo "📋 Alle Cargo.toml Dateien:"
-        find . -name "Cargo.toml" -type f | while read file; do
-          echo "  📄 $file"
-          echo "    Inhalt der ersten 20 Zeilen:"
-          head -20 "$file" | sed 's/^/      /'
-          echo ""
-        done
-        
-        echo ""
-        echo "🔍 Rust Source Struktur:"
-        find . -name "*.rs" -type f | head -20 | while read file; do
-          echo "  🦀 $file"
-        done
-        
-        echo ""
-        echo "📡 Config-Dateien Analyse:"
-        find . -name "config.rs" -type f | while read file; do
-          echo "  📄 $file"
-          echo "    Relevant content:"
-          grep -n "RENDEZVOUS\|PUB_KEY\|SERVER" "$file" | head -10 | sed 's/^/      /'
-          echo ""
-        done
-        
-        echo ""
-        echo "🔧 Build Dependencies Check:"
-        if [ -f "Cargo.toml" ]; then
-          echo "  📋 Dependencies in root Cargo.toml:"
-          grep -A 20 "\[dependencies\]" Cargo.toml | sed 's/^/    /'
-        fi
-        
-        echo ""
-        echo "🎯 Binaries definiert:"
-        find . -name "Cargo.toml" -exec grep -l "\[\[bin\]\]" {} \; | while read file; do
-          echo "  📄 $file:"
-          grep -A 5 "\[\[bin\]\]" "$file" | sed 's/^/    /'
-        done
-
-    - name: Test basic cargo commands
-      run: |
-        echo "🧪 CARGO KOMMANDO TESTS"
-        echo "======================"
-        
-        echo ""
-        echo "📋 cargo version:"
-        cargo version
-        
-        echo ""
-        echo "🔍 cargo metadata (gekürzt):"
-        if cargo metadata --no-deps --format-version 1 2>/dev/null; then
-          echo "✅ Metadata erfolgreich gelesen"
-        else
-          echo "❌ Metadata fehlgeschlagen:"
-          cargo metadata --no-deps --format-version 1 2>&1 | head -10
-        fi
-        
-        echo ""
-        echo "🏗️ cargo check (nur Syntax):"
-        if cargo check 2>&1; then
-          echo "✅ Cargo check erfolgreich"
-        else
-          echo "❌ Cargo check fehlgeschlagen"
-        fi
-
-    - name: Analyze specific build errors
-      run: |
-        echo "🚨 BUILD ERROR ANALYSE"
-        echo "====================="
-        
-        echo ""
-        echo "🔨 Versuche cargo build mit Details:"
-        cargo build --verbose 2>&1 | tee build_output.log || true
-        
-        echo ""
-        echo "📊 Build Output Analyse:"
-        if [ -f "build_output.log" ]; then
-          echo "  🔍 Fehler-Pattern:"
-          grep -i "error\|failed\|cannot\|undefined" build_output.log | head -10 | sed 's/^/    /'
-          
-          echo ""
-          echo "  📦 Fehlende Dependencies:"
-          grep -i "could not find\|not found\|missing" build_output.log | head -5 | sed 's/^/    /'
-          
-          echo ""
-          echo "  🔗 Linker Probleme:"
-          grep -i "link\|ld\|library" build_output.log | head -5 | sed 's/^/    /'
-        fi
-
-    - name: Check secrets configuration
-      env:
-        RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
-        RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
-      run: |
-        echo "🔐 SECRETS KONFIGURATION"
-        echo "======================="
-        
-        if [ -z "${{ secrets.RENDEZVOUS_SERVER }}" ]; then
-          echo "❌ RENDEZVOUS_SERVER Secret NICHT gesetzt!"
-          echo "   Gehe zu: Settings → Secrets and variables → Actions"
-          echo "   Erstelle Secret: RENDEZVOUS_SERVER"
-        else
-          echo "✅ RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}"
-        fi
-        
-        if [ -z "${{ secrets.RS_PUB_KEY }}" ]; then
-          echo "❌ RS_PUB_KEY Secret NICHT gesetzt!"
-          echo "   Gehe zu: Settings → Secrets and variables → Actions"
-          echo "   Erstelle Secret: RS_PUB_KEY"
-        else
-          echo "✅ RS_PUB_KEY: $(echo "${{ secrets.RS_PUB_KEY }}" | cut -c1-20)..."
-        fi
-
-    - name: Try minimal fixes and build
-      run: |
-        echo "🔧 VERSUCHE MINIMALE FIXES"
-        echo "========================="
-        
-        # Installiere weitere Dependencies die oft fehlen
-        echo "📦 Installiere häufig fehlende Dependencies:"
+        echo "📦 Installiere System Dependencies..."
         sudo apt-get update
         sudo apt-get install -y \
           pkg-config \
@@ -169,67 +43,171 @@ jobs:
           libxcb-xfixes0-dev \
           libudev-dev \
           cmake \
-          build-essential
+          build-essential \
+          libpam0g-dev \
+          libgstreamer1.0-dev \
+          libgstreamer-plugins-base1.0-dev \
+          libayatana-appindicator3-dev \
+          librsvg2-dev
+
+    - name: Configure custom RustDesk settings
+      env:
+        RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+        RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+      run: |
+        echo "🔧 Konfiguriere Custom RustDesk Settings..."
         
-        echo ""
-        echo "🔧 Konfiguriere Secrets falls gesetzt:"
-        if [ -n "${{ secrets.RENDEZVOUS_SERVER }}" ] && [ -n "${{ secrets.RS_PUB_KEY }}" ]; then
-          find . -name "config.rs" -type f | while read file; do
-            if grep -q "RENDEZVOUS_SERVERS\|RS_PUB_KEY" "$file"; then
-              echo "  🔧 Bearbeite $file"
-              cp "$file" "$file.backup"
-              
-              # Vorsichtige Ersetzungen nur wenn Pattern existiert
-              if grep -q "RENDEZVOUS_SERVERS" "$file"; then
-                sed -i 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' "$file"
-                echo "    ✅ RENDEZVOUS_SERVER konfiguriert"
-              fi
-              
-              if grep -q "RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
-                sed -i 's/pub const \(RS_PUB_KEY\|PUBLIC_RS_PUB_KEY\): &str = ".*";/pub const \1: \&str = "${{ secrets.RS_PUB_KEY }}";/' "$file"
-                echo "    ✅ RS_PUB_KEY konfiguriert"
-              fi
-            fi
-          done
+        # Prüfe Secrets
+        if [ -z "${{ secrets.RENDEZVOUS_SERVER }}" ]; then
+          echo "⚠️ RENDEZVOUS_SERVER Secret nicht gesetzt - verwende Standard"
         else
-          echo "  ⚠️ Secrets nicht gesetzt, verwende Default-Werte"
+          echo "✅ RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}"
         fi
         
+        if [ -z "${{ secrets.RS_PUB_KEY }}" ]; then
+          echo "⚠️ RS_PUB_KEY Secret nicht gesetzt - verwende Standard"
+        else
+          echo "✅ RS_PUB_KEY: $(echo "${{ secrets.RS_PUB_KEY }}" | cut -c1-20)..."
+        fi
+        
+        # Setze Build-Umgebungsvariablen
+        echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" >> $GITHUB_ENV
+        echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" >> $GITHUB_ENV
+        
+        # Finde und modifiziere Config-Dateien
         echo ""
-        echo "🚀 Finaler Build-Versuch:"
-        if cargo build --release 2>&1 | tee final_build.log; then
+        echo "🔍 Suche Config-Dateien..."
+        find . -name "config.rs" -type f | while read file; do
+          echo "📄 Gefunden: $file"
+          
+          # Prüfe ob relevante Konstanten vorhanden sind
+          if grep -q "RENDEZVOUS_SERVERS\|RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
+            echo "  🔧 Bearbeite $file..."
+            
+            # Backup erstellen
+            cp "$file" "$file.backup"
+            
+            # Server konfigurieren (nur wenn Secret gesetzt und Pattern vorhanden)
+            if [ -n "${{ secrets.RENDEZVOUS_SERVER }}" ] && grep -q "RENDEZVOUS_SERVERS" "$file"; then
+              sed -i 's/pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*\];/pub const RENDEZVOUS_SERVERS: \&[\&str] = \&["${{ secrets.RENDEZVOUS_SERVER }}"];/' "$file"
+              echo "    ✅ RENDEZVOUS_SERVER konfiguriert"
+            fi
+            
+            # Public Key konfigurieren (nur wenn Secret gesetzt und Pattern vorhanden)
+            if [ -n "${{ secrets.RS_PUB_KEY }}" ] && grep -q "RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file"; then
+              sed -i 's/pub const \(RS_PUB_KEY\|PUBLIC_RS_PUB_KEY\): &str = ".*";/pub const \1: \&str = "${{ secrets.RS_PUB_KEY }}";/' "$file"
+              echo "    ✅ RS_PUB_KEY konfiguriert"
+            fi
+            
+            # Zeige Änderungen
+            echo "    📋 Relevante Zeilen nach Änderung:"
+            grep -n "RENDEZVOUS_SERVERS\|RS_PUB_KEY\|PUBLIC_RS_PUB_KEY" "$file" | head -3 | sed 's/^/      /'
+          else
+            echo "  ℹ️ Keine relevanten Konstanten gefunden"
+          fi
+        done
+
+    - name: Build RustDesk
+      run: |
+        echo "🚀 Starte RustDesk Build..."
+        echo "Build-Umgebung:"
+        echo "  Rust: $(rustc --version)"
+        echo "  Cargo: $(cargo --version)"
+        
+        # Build mit detailliertem Output
+        echo ""
+        echo "🔨 Führe cargo build --release aus..."
+        if cargo build --release --verbose 2>&1 | tee build.log; then
+          echo ""
           echo "🎉 BUILD ERFOLGREICH!"
           
           echo ""
-          echo "📦 Gebaute Dateien:"
+          echo "📦 Gebaute Binaries:"
           find target/release -type f -executable 2>/dev/null | while read file; do
-            size=$(du -h "$file" | cut -f1)
-            echo "  ✅ $file ($size)"
+            if [ -f "$file" ]; then
+              size=$(du -h "$file" | cut -f1)
+              echo "  ✅ $file ($size)"
+            fi
           done
+          
+          # Prüfe spezifisch auf rustdesk binary
+          if [ -f "target/release/rustdesk" ]; then
+            echo ""
+            echo "✅ RustDesk Binary erfolgreich erstellt!"
+            ls -la target/release/rustdesk
+            file target/release/rustdesk
+          fi
+          
         else
-          echo "❌ Build fehlgeschlagen. Letzte Fehlermeldungen:"
-          tail -20 final_build.log | sed 's/^/  /'
+          echo ""
+          echo "❌ BUILD FEHLGESCHLAGEN"
+          echo "Letzte Fehlermeldungen:"
+          tail -20 build.log | sed 's/^/  /'
+          exit 1
         fi
 
-    - name: Upload build logs and any artifacts
+    - name: Create release package
+      run: |
+        echo "📦 Erstelle Release-Paket..."
+        
+        if [ -f "target/release/rustdesk" ]; then
+          # Erstelle Release-Verzeichnis
+          mkdir -p rustdesk-linux-release
+          
+          # Kopiere Binary
+          cp target/release/rustdesk rustdesk-linux-release/
+          
+          # Erstelle Info-Datei
+          cat > rustdesk-linux-release/BUILD_INFO.txt << EOF
+RustDesk Custom Build
+====================
+Built on: $(date)
+Git commit: ${GITHUB_SHA:0:8}
+Build environment: Ubuntu 22.04
+Rust version: $(rustc --version)
+
+Custom Configuration:
+- RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER || 'default' }}
+- RS_PUB_KEY: $([ -n "${{ secrets.RS_PUB_KEY }}" ] && echo "configured" || echo "default")
+
+Usage:
+  chmod +x rustdesk
+  ./rustdesk
+EOF
+          
+          # Mache Binary ausführbar
+          chmod +x rustdesk-linux-release/rustdesk
+          
+          echo "✅ Release-Paket erstellt:"
+          ls -la rustdesk-linux-release/
+        else
+          echo "❌ Kein rustdesk binary gefunden"
+          exit 1
+        fi
+
+    - name: Upload RustDesk Linux Binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: rustdesk-linux-custom
+        path: rustdesk-linux-release/
+        if-no-files-found: error
+
+    - name: Upload build logs
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: build-analysis-logs
+        name: linux-build-logs
         path: |
-          build_output.log
-          final_build.log
-          target/release/*
+          build.log
           **/*.backup
         if-no-files-found: warn
 
-  # Schneller Windows Test 
-  quick-windows-test:
-    name: Quick Windows Test
+  build-windows:
+    name: Build RustDesk Windows
     runs-on: windows-latest
     
     steps:
-    - name: Checkout
+    - name: Checkout source code
       uses: actions/checkout@v4
       with:
         submodules: recursive
@@ -239,48 +217,166 @@ jobs:
       with:
         toolchain: "1.75.0"
 
-    - name: Quick analysis
+    - name: Configure custom RustDesk settings
+      env:
+        RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+        RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
       run: |
-        Write-Host "🔍 Windows Quick Analysis"
-        Write-Host "========================"
+        Write-Host "🔧 Konfiguriere Custom RustDesk Settings..."
         
-        Write-Host ""
-        Write-Host "📁 Repository contents:"
-        Get-ChildItem | Select-Object Name, Length
-        
-        Write-Host ""
-        Write-Host "📋 Cargo.toml check:"
-        if (Test-Path "Cargo.toml") {
-          Write-Host "✅ Cargo.toml exists"
-          Get-Content "Cargo.toml" | Select-Object -First 20
+        # Prüfe Secrets
+        if ("${{ secrets.RENDEZVOUS_SERVER }}" -eq "") {
+          Write-Host "⚠️ RENDEZVOUS_SERVER Secret nicht gesetzt - verwende Standard"
         } else {
-          Write-Host "❌ No Cargo.toml found"
+          Write-Host "✅ RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}"
         }
         
-        Write-Host ""
-        Write-Host "🚀 Quick build test:"
-        try {
-          cargo build 2>&1 | Tee-Object -FilePath "windows_build.log"
-          Write-Host "✅ Build command completed"
-        } catch {
-          Write-Host "❌ Build failed: $($_.Exception.Message)"
+        if ("${{ secrets.RS_PUB_KEY }}" -eq "") {
+          Write-Host "⚠️ RS_PUB_KEY Secret nicht gesetzt - verwende Standard"
+        } else {
+          Write-Host "✅ RS_PUB_KEY: $(${{ secrets.RS_PUB_KEY }}.Substring(0, [Math]::Min(20, ${{ secrets.RS_PUB_KEY }}.Length)))..."
         }
         
+        # Setze Build-Umgebungsvariablen
+        echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        
+        # Finde und modifiziere Config-Dateien
         Write-Host ""
-        Write-Host "📦 Any executables created:"
-        if (Test-Path "target") {
-          Get-ChildItem -Recurse "target" -Include "*.exe" | Select-Object FullName, Length
-        } else {
-          Write-Host "No target directory found"
+        Write-Host "🔍 Suche Config-Dateien..."
+        Get-ChildItem -Recurse -Include "config.rs" | ForEach-Object {
+          $file = $_.FullName
+          Write-Host "📄 Gefunden: $file"
+          
+          $content = Get-Content $file -Raw -ErrorAction SilentlyContinue
+          if ($content -and ($content -match 'RENDEZVOUS_SERVERS|RS_PUB_KEY|PUBLIC_RS_PUB_KEY')) {
+            Write-Host "  🔧 Bearbeite $file..."
+            
+            # Backup erstellen
+            Copy-Item $file "$file.backup" -ErrorAction SilentlyContinue
+            
+            # Server konfigurieren
+            if ("${{ secrets.RENDEZVOUS_SERVER }}" -ne "" -and $content -match 'RENDEZVOUS_SERVERS') {
+              $content = $content -replace 'pub const RENDEZVOUS_SERVERS: &\[&str\] = &\[.*?\];', "pub const RENDEZVOUS_SERVERS: &[&str] = &[`"${{ secrets.RENDEZVOUS_SERVER }}`"];"
+              Write-Host "    ✅ RENDEZVOUS_SERVER konfiguriert"
+            }
+            
+            # Public Key konfigurieren
+            if ("${{ secrets.RS_PUB_KEY }}" -ne "" -and $content -match 'RS_PUB_KEY|PUBLIC_RS_PUB_KEY') {
+              $content = $content -replace 'pub const (RS_PUB_KEY|PUBLIC_RS_PUB_KEY): &str = ".*?";', "pub const `$1: &str = `"${{ secrets.RS_PUB_KEY }}`";"
+              Write-Host "    ✅ RS_PUB_KEY konfiguriert"
+            }
+            
+            # Schreibe zurück
+            Set-Content $file $content -NoNewline -ErrorAction SilentlyContinue
+          } else {
+            Write-Host "  ℹ️ Keine relevanten Konstanten gefunden"
+          }
         }
       shell: powershell
 
-    - name: Upload Windows logs
+    - name: Build RustDesk
+      run: |
+        Write-Host "🚀 Starte RustDesk Build..."
+        Write-Host "Build-Umgebung:"
+        Write-Host "  Rust: $(rustc --version)"
+        Write-Host "  Cargo: $(cargo --version)"
+        
+        Write-Host ""
+        Write-Host "🔨 Führe cargo build --release aus..."
+        
+        try {
+          cargo build --release --verbose 2>&1 | Tee-Object -FilePath "build.log"
+          
+          Write-Host ""
+          Write-Host "🎉 BUILD ERFOLGREICH!"
+          
+          Write-Host ""
+          Write-Host "📦 Gebaute Binaries:"
+          if (Test-Path "target\release") {
+            Get-ChildItem "target\release" -Include "*.exe" | ForEach-Object {
+              $size = [math]::Round($_.Length / 1MB, 1)
+              Write-Host "  ✅ $($_.FullName) ($size MB)"
+            }
+          }
+          
+          # Prüfe spezifisch auf rustdesk.exe
+          if (Test-Path "target\release\rustdesk.exe") {
+            Write-Host ""
+            Write-Host "✅ RustDesk.exe erfolgreich erstellt!"
+            Get-Item "target\release\rustdesk.exe" | Format-List Name, Length, LastWriteTime
+          } else {
+            Write-Host "⚠️ rustdesk.exe nicht gefunden, aber andere Binaries vorhanden"
+          }
+          
+        } catch {
+          Write-Host ""
+          Write-Host "❌ BUILD FEHLGESCHLAGEN: $($_.Exception.Message)"
+          if (Test-Path "build.log") {
+            Write-Host "Letzte Fehlermeldungen:"
+            Get-Content "build.log" | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" }
+          }
+          exit 1
+        }
+      shell: powershell
+
+    - name: Create release package
+      run: |
+        Write-Host "📦 Erstelle Release-Paket..."
+        
+        # Suche nach rustdesk executable (könnte .exe oder anderer Name sein)
+        $rustdeskExecutables = Get-ChildItem "target\release" -Include "rustdesk*" -File
+        
+        if ($rustdeskExecutables.Count -gt 0) {
+          # Erstelle Release-Verzeichnis
+          New-Item -ItemType Directory -Path "rustdesk-windows-release" -Force
+          
+          # Kopiere alle rustdesk executables
+          $rustdeskExecutables | ForEach-Object {
+            Copy-Item $_.FullName "rustdesk-windows-release\"
+            Write-Host "✅ Kopiert: $($_.Name)"
+          }
+          
+          # Erstelle Info-Datei
+          $buildInfo = @"
+RustDesk Custom Build
+====================
+Built on: $(Get-Date)
+Git commit: $($env:GITHUB_SHA.Substring(0,8))
+Build environment: Windows Latest
+Rust version: $(rustc --version)
+
+Custom Configuration:
+- RENDEZVOUS_SERVER: $("${{ secrets.RENDEZVOUS_SERVER }}" -ne "" ? "${{ secrets.RENDEZVOUS_SERVER }}" : "default")
+- RS_PUB_KEY: $("${{ secrets.RS_PUB_KEY }}" -ne "" ? "configured" : "default")
+
+Usage:
+  Double-click rustdesk.exe to run
+"@
+          
+          Set-Content "rustdesk-windows-release\BUILD_INFO.txt" $buildInfo
+          
+          Write-Host "✅ Release-Paket erstellt:"
+          Get-ChildItem "rustdesk-windows-release" | Format-Table Name, Length
+        } else {
+          Write-Host "❌ Keine rustdesk executables gefunden"
+          exit 1
+        }
+      shell: powershell
+
+    - name: Upload RustDesk Windows Binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: rustdesk-windows-custom
+        path: rustdesk-windows-release/
+        if-no-files-found: error
+
+    - name: Upload build logs
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: windows-analysis-logs
+        name: windows-build-logs
         path: |
-          windows_build.log
-          target/**/*.exe
+          build.log
+          **/*.backup
         if-no-files-found: warn
