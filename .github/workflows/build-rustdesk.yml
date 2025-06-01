@@ -172,25 +172,33 @@ jobs:
           done
           
           # Create info file
-          cat > rustdesk-linux-release/BUILD_INFO.txt << EOF
-RustDesk Custom Build
-====================
-Built on: $(date)
-Commit: ${GITHUB_SHA:0:8}
-Platform: Ubuntu 22.04
-Rust: $(rustc --version)
-
-Custom Configuration:
-- RENDEZVOUS_SERVER: ${RENDEZVOUS_SERVER:-default}
-- RS_PUB_KEY: $([ -n "$RS_PUB_KEY" ] && echo "configured" || echo "default")
-
-Binaries included:
-$(echo "$RUSTDESK_BINS" | while read bin; do echo "- $(basename "$bin")"; done)
-
-Usage:
-  chmod +x rustdesk
-  ./rustdesk
-EOF
+          echo "RustDesk Custom Build" > rustdesk-linux-release/BUILD_INFO.txt
+          echo "====================" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Built on: $(date)" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Commit: ${GITHUB_SHA:0:8}" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Platform: Ubuntu 22.04" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Rust: $(rustc --version)" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Custom Configuration:" >> rustdesk-linux-release/BUILD_INFO.txt
+          if [ -n "$RENDEZVOUS_SERVER" ]; then
+            echo "- RENDEZVOUS_SERVER: $RENDEZVOUS_SERVER" >> rustdesk-linux-release/BUILD_INFO.txt
+          else
+            echo "- RENDEZVOUS_SERVER: default" >> rustdesk-linux-release/BUILD_INFO.txt
+          fi
+          if [ -n "$RS_PUB_KEY" ]; then
+            echo "- RS_PUB_KEY: configured" >> rustdesk-linux-release/BUILD_INFO.txt
+          else
+            echo "- RS_PUB_KEY: default" >> rustdesk-linux-release/BUILD_INFO.txt
+          fi
+          echo "" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Binaries included:" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "$RUSTDESK_BINS" | while read bin; do 
+            echo "- $(basename "$bin")" >> rustdesk-linux-release/BUILD_INFO.txt
+          done
+          echo "" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "Usage:" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "  chmod +x rustdesk" >> rustdesk-linux-release/BUILD_INFO.txt
+          echo "  ./rustdesk" >> rustdesk-linux-release/BUILD_INFO.txt
           
           echo "Release package created:"
           ls -la rustdesk-linux-release/
